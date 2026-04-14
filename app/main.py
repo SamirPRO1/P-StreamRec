@@ -1186,20 +1186,26 @@ async def get_recording_thumbnail(username: str, filename: str):
 
 @app.get("/api/models")
 async def get_models():
-    """Récupère la liste des modèles depuis SQLite"""
-    models = await db.get_all_models()
-    
-    # Formater pour compatibilité avec le frontend
-    formatted_models = []
-    for model in models:
-        formatted_models.append({
-            "username": model['username'],
-            "autoRecord": bool(model.get('auto_record', True)),
-            "recordQuality": model.get('record_quality', 'best'),
-            "retentionDays": model.get('retention_days', 30)
-        })
-    
-    return {"models": formatted_models}
+    """Récupère la liste des modèles depuis SQLite.
+
+    Jamais 500 : en cas d'erreur transitoire (ex : verrou SQLite pendant une
+    écriture par un background task), on renvoie une liste vide pour éviter de
+    casser l'affichage côté front. Le prochain fetch récupérera l'état correct.
+    """
+    try:
+        models = await db.get_all_models()
+        formatted_models = []
+        for model in models:
+            formatted_models.append({
+                "username": model['username'],
+                "autoRecord": bool(model.get('auto_record', True)),
+                "recordQuality": model.get('record_quality', 'best'),
+                "retentionDays": model.get('retention_days', 30)
+            })
+        return {"models": formatted_models}
+    except Exception as e:
+        logger.error("Erreur /api/models", error=str(e), exc_info=True)
+        return {"models": [], "error": "transient"}
 
 
 @app.post("/api/models")

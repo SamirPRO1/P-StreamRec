@@ -9,16 +9,41 @@ from datetime import datetime
 from ..logger import logger
 
 class Database:
+    # Timeout par défaut (ms) pour l'attente d'un verrou SQLite avant "database is locked"
+    BUSY_TIMEOUT_MS = 10000
+
     def __init__(self, db_path: Path):
         self.db_path = db_path
         self._initialized = False
-    
+
+    def _connect(self):
+        """Ouvre une connexion aiosqlite avec timeout de verrou.
+
+        Retourne un context manager async. Le timeout Python évite les erreurs
+        immédiates "database is locked" quand plusieurs tâches écrivent/lisent
+        en parallèle (monitoring, sync, conversion, endpoints API).
+        """
+        # timeout (s): délai max d'attente d'un verrou avant OperationalError
+        return aiosqlite.connect(self.db_path, timeout=self.BUSY_TIMEOUT_MS / 1000)
+
+    async def _apply_pragmas(self, db):
+        """Active WAL + busy_timeout sur une connexion."""
+        await db.execute(f"PRAGMA busy_timeout = {self.BUSY_TIMEOUT_MS}")
+
     async def initialize(self):
         """Initialise la base de données et crée les tables"""
         if self._initialized:
             return
-        
-        async with aiosqlite.connect(self.db_path) as db:
+
+        async with self._connect() as db:
+            # Activer WAL : lectures non bloquées par les écritures concurrentes
+            # (résout les 500 sur /api/models et /api/following sous charge)
+            try:
+                await db.execute("PRAGMA journal_mode=WAL")
+                await db.execute("PRAGMA synchronous=NORMAL")
+            except Exception as e:
+                logger.warning("Impossible d'activer WAL", error=str(e))
+            await self._apply_pragmas(db)
             # Table pour les modèles et leur statut
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS models (
@@ -153,7 +178,7 @@ class Database:
         
         now = int(datetime.now().timestamp())
         
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             await db.execute("""
                 INSERT INTO models (
                     username, display_name, auto_record, record_quality, 
@@ -188,7 +213,7 @@ class Database:
         
         now = int(datetime.now().timestamp())
         
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             update_fields = {
                 'is_online': is_online,
                 'viewers': viewers,
@@ -214,7 +239,7 @@ class Database:
         """Récupère les informations d'un modèle"""
         await self.initialize()
         
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 "SELECT * FROM models WHERE username = ?",
@@ -230,7 +255,7 @@ class Database:
         """Récupère tous les modèles"""
         await self.initialize()
         
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 "SELECT * FROM models ORDER BY username"
@@ -242,7 +267,7 @@ class Database:
         """Récupère les modèles avec auto-record activé"""
         await self.initialize()
         
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 "SELECT * FROM models WHERE auto_record = 1 ORDER BY username"
@@ -254,7 +279,7 @@ class Database:
         """Supprime un modèle"""
         await self.initialize()
         
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             await db.execute("DELETE FROM models WHERE username = ?", (username,))
             await db.commit()
         
@@ -282,7 +307,7 @@ class Database:
         if not recording_id:
             recording_id = f"{username}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             await db.execute("""
                 INSERT INTO recordings (
                     username, recording_id, filename, file_path, file_size, 
@@ -307,7 +332,7 @@ class Database:
         """Récupère les enregistrements d'un modèle"""
         await self.initialize()
         
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 """
@@ -324,7 +349,7 @@ class Database:
         """Compte les enregistrements (convertis ou non)"""
         await self.initialize()
 
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             cursor = await db.execute(
                 "SELECT COUNT(*) FROM recordings WHERE username = ?",
                 (username,)
@@ -336,7 +361,7 @@ class Database:
         """Supprime un enregistrement de la base de données"""
         await self.initialize()
 
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             await db.execute(
                 "DELETE FROM recordings WHERE username = ? AND filename = ?",
                 (username, filename)
@@ -347,7 +372,7 @@ class Database:
         """Incrémente le compteur d'échecs et stocke l'erreur pour un enregistrement."""
         await self.initialize()
         now = int(datetime.now().timestamp())
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             await db.execute(
                 """
                 UPDATE recordings
@@ -363,7 +388,7 @@ class Database:
     async def reset_conversion_failure(self, recording_id: str) -> bool:
         """Réinitialise le compteur d'échecs (pour retry manuel). Retourne True si trouvé."""
         await self.initialize()
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             cursor = await db.execute(
                 """
                 UPDATE recordings
@@ -380,7 +405,7 @@ class Database:
     async def get_recording_by_id(self, recording_id: str) -> Optional[Dict[str, Any]]:
         """Récupère un enregistrement par son recording_id."""
         await self.initialize()
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 "SELECT * FROM recordings WHERE recording_id = ? LIMIT 1",
@@ -408,7 +433,7 @@ class Database:
         await self.initialize()
         now = int(datetime.now().timestamp())
 
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             await db.execute("""
                 INSERT INTO chaturbate_auth (
                     id, username, password_hash, is_logged_in,
@@ -440,7 +465,7 @@ class Database:
         """Get Chaturbate auth state"""
         await self.initialize()
 
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 "SELECT * FROM chaturbate_auth WHERE id = 1"
@@ -454,7 +479,7 @@ class Database:
         """Clear Chaturbate auth state"""
         await self.initialize()
 
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             await db.execute("DELETE FROM chaturbate_auth WHERE id = 1")
             await db.commit()
 
@@ -474,7 +499,7 @@ class Database:
         await self.initialize()
         now = int(datetime.now().timestamp())
 
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             await db.execute("""
                 INSERT INTO followed_models (
                     username, display_name, is_online, viewers,
@@ -500,7 +525,7 @@ class Database:
         """Get all followed models"""
         await self.initialize()
 
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 "SELECT * FROM followed_models ORDER BY is_online DESC, username"
@@ -512,7 +537,7 @@ class Database:
         """Clear all followed models"""
         await self.initialize()
 
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             await db.execute("DELETE FROM followed_models")
             await db.commit()
 
@@ -520,7 +545,7 @@ class Database:
         """Remove followed models no longer in the followed list"""
         await self.initialize()
 
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             cursor = await db.execute("SELECT username FROM followed_models")
             rows = await cursor.fetchall()
             for row in rows:
@@ -541,7 +566,7 @@ class Database:
         """Get all recordings with pagination"""
         await self.initialize()
 
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             db.row_factory = aiosqlite.Row
 
             # Base filter: when show_ts=False, only count converted recordings
@@ -593,7 +618,7 @@ class Database:
         """Get list of usernames that have recordings"""
         await self.initialize()
 
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             cursor = await db.execute(
                 "SELECT DISTINCT username FROM recordings ORDER BY username"
             )
@@ -607,7 +632,7 @@ class Database:
     async def get_setting(self, key: str) -> Optional[str]:
         """Get a setting value by key"""
         await self.initialize()
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             cursor = await db.execute(
                 "SELECT value FROM settings WHERE key = ?", (key,)
             )
@@ -618,7 +643,7 @@ class Database:
         """Set a setting value"""
         await self.initialize()
         now = int(datetime.now().timestamp())
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             await db.execute("""
                 INSERT INTO settings (key, value, updated_at)
                 VALUES (?, ?, ?)
@@ -645,7 +670,7 @@ class Database:
     async def get_playback_position(self, recording_id: str) -> Optional[Dict[str, Any]]:
         """Get playback position for a recording"""
         await self.initialize()
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 "SELECT * FROM playback_positions WHERE recording_id = ?",
@@ -664,7 +689,7 @@ class Database:
         """Save playback position for a recording"""
         await self.initialize()
         now = int(datetime.now().timestamp())
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             await db.execute("""
                 INSERT INTO playback_positions (recording_id, username, position_seconds, duration_seconds, updated_at)
                 VALUES (?, ?, ?, ?, ?)
@@ -679,7 +704,7 @@ class Database:
     async def get_all_playback_positions(self, username: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get all playback positions, optionally filtered by username"""
         await self.initialize()
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             db.row_factory = aiosqlite.Row
             if username:
                 cursor = await db.execute(
@@ -696,7 +721,7 @@ class Database:
     async def get_recordings_grouped_by_model(self, show_ts: bool = False) -> List[Dict[str, Any]]:
         """Get recordings grouped by model with stats"""
         await self.initialize()
-        async with aiosqlite.connect(self.db_path) as db:
+        async with self._connect() as db:
             db.row_factory = aiosqlite.Row
             # When show_ts is False, only count recordings that have been converted (have mp4_path)
             # or show all recordings when show_ts is True

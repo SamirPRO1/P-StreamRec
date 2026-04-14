@@ -4,6 +4,8 @@ API Router: Following management
 
 from fastapi import APIRouter, HTTPException
 
+from ..logger import logger
+
 router = APIRouter(prefix="/api", tags=["following"])
 
 # Set by main.py at startup
@@ -26,40 +28,57 @@ async def get_following():
     Requires Chaturbate login.
     """
     if not _auth_service:
-        raise HTTPException(status_code=503, detail="Auth service not initialized")
+        # Service pas encore initialisé : retourner une liste vide plutôt qu'une 500
+        # (évite que le frontend casse pendant le startup)
+        return {"models": [], "isLoggedIn": False, "message": "Initializing"}
 
-    status = _auth_service.get_status()
-    if not status.get("isLoggedIn"):
+    try:
+        status = _auth_service.get_status()
+        is_logged_in = bool(status.get("isLoggedIn"))
+
+        # Lire le cache local même sans login : évite un affichage vide intermittent
+        followed = []
+        tracked_map = {}
+        if _db:
+            try:
+                followed = await _db.get_all_followed()
+                tracked_models = await _db.get_all_models()
+                tracked_map = {m["username"]: m for m in tracked_models}
+            except Exception as e:
+                logger.warning("DB read failed in /api/following", error=str(e))
+                followed = []
+                tracked_map = {}
+
+        for model in followed:
+            tracked = tracked_map.get(model["username"])
+            model["isTracked"] = tracked is not None
+            model["is_recording"] = bool(tracked and tracked.get("is_recording"))
+
+        online = [m for m in followed if m.get("is_online")]
+        offline = [m for m in followed if not m.get("is_online")]
+
+        return {
+            "models": followed,
+            "online": online,
+            "offline": offline,
+            "onlineCount": len(online),
+            "offlineCount": len(offline),
+            "isLoggedIn": is_logged_in,
+            "message": None if is_logged_in else "Login required to view followed models",
+        }
+    except Exception as e:
+        # Ne jamais renvoyer 500 sur cet endpoint : le front s'affiche mieux avec une
+        # liste vide (qui sera re-peuplée au prochain fetch) qu'avec une erreur réseau
+        logger.error("Erreur /api/following", error=str(e), exc_info=True)
         return {
             "models": [],
+            "online": [],
+            "offline": [],
+            "onlineCount": 0,
+            "offlineCount": 0,
             "isLoggedIn": False,
-            "message": "Login required to view followed models"
+            "message": "Temporary error, retrying...",
         }
-
-    # Get from local DB cache first
-    followed = await _db.get_all_followed()
-
-    # Add isTracked and is_recording flags from models table
-    tracked_models = await _db.get_all_models()
-    tracked_map = {m["username"]: m for m in tracked_models}
-
-    for model in followed:
-        tracked = tracked_map.get(model["username"])
-        model["isTracked"] = tracked is not None
-        model["is_recording"] = bool(tracked and tracked.get("is_recording"))
-
-    # Split into online/offline
-    online = [m for m in followed if m.get("is_online")]
-    offline = [m for m in followed if not m.get("is_online")]
-
-    return {
-        "models": followed,
-        "online": online,
-        "offline": offline,
-        "onlineCount": len(online),
-        "offlineCount": len(offline),
-        "isLoggedIn": True,
-    }
 
 
 @router.post("/following/sync")
