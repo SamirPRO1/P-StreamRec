@@ -3027,6 +3027,18 @@ button {
   margin-top: 0.35rem;
 }
 
+.conversion-fail-badge {
+  font-size: 0.72rem;
+  color: #ff6b6b;
+  background: rgba(255, 107, 107, 0.1);
+  border: 1px solid rgba(255, 107, 107, 0.3);
+  border-radius: 4px;
+  padding: 0.2rem 0.4rem;
+  margin-top: 0.35rem;
+  display: inline-block;
+  cursor: help;
+}
+
 .progress-bar {
   width: 100%;
   height: 3px;

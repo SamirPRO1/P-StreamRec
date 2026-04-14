@@ -155,14 +155,24 @@ async function logoutChaturbate() {
 // ============================================
 // Check FlareSolverr status
 // ============================================
-async function checkFlareSolverr() {
+async function checkFlareSolverr(manual) {
   var statusEl = document.getElementById('flareStatus');
   var versionRow = document.getElementById('flareVersionRow');
   var versionEl = document.getElementById('flareVersion');
   var urlEl = document.getElementById('flareUrl');
+  var messageRow = document.getElementById('flareMessageRow');
+  var messageEl = document.getElementById('flareMessage');
+  var testBtn = document.getElementById('flareTestBtn');
+
+  if (manual && testBtn) {
+    testBtn.disabled = true;
+    testBtn.textContent = 'Testing...';
+  }
+  statusEl.className = 'status-indicator unknown';
+  statusEl.textContent = 'Checking...';
 
   try {
-    var res = await fetch('/api/chaturbate/status');
+    var res = await fetch('/api/chaturbate/status', { cache: 'no-store' });
     if (res.ok) {
       var data = await res.json();
 
@@ -174,8 +184,25 @@ async function checkFlareSolverr() {
         statusEl.textContent = 'Not Available';
       }
 
-      if (data.flaresolverrUrl) {
+      if (data.flaresolverrMessage) {
+        if (messageRow) messageRow.style.display = '';
+        if (messageEl) messageEl.textContent = data.flaresolverrMessage;
+      }
+
+      if (data.flaresolverrVersion && versionRow && versionEl) {
+        versionRow.style.display = '';
+        versionEl.textContent = data.flaresolverrVersion;
+      }
+
+      if (data.flaresolverrUrl && urlEl) {
         urlEl.textContent = data.flaresolverrUrl;
+      }
+
+      if (manual) {
+        showNotification(
+          data.flaresolverrAvailable ? 'FlareSolverr reachable' : 'FlareSolverr: ' + (data.flaresolverrMessage || 'unreachable'),
+          data.flaresolverrAvailable ? 'success' : 'error'
+        );
       }
     } else {
       statusEl.className = 'status-indicator unknown';
@@ -184,6 +211,13 @@ async function checkFlareSolverr() {
   } catch (e) {
     statusEl.className = 'status-indicator unknown';
     statusEl.textContent = 'Not Available';
+    if (messageEl) messageEl.textContent = 'Network error reaching P-StreamRec API';
+    if (messageRow) messageRow.style.display = '';
+  } finally {
+    if (manual && testBtn) {
+      testBtn.disabled = false;
+      testBtn.textContent = 'Test connection';
+    }
   }
 }
 
@@ -239,6 +273,10 @@ async function loadRecordingSettings() {
         var thresh = data.auto_delete_threshold || 90;
         autoDeleteThreshold.value = thresh;
         if (thresholdValue) thresholdValue.textContent = thresh + '%';
+      }
+      var maxResSelect = document.getElementById('maxResolutionSelect');
+      if (maxResSelect) {
+        maxResSelect.value = String(data.max_resolution || 0);
       }
     }
   } catch (e) {

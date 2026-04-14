@@ -103,6 +103,10 @@
                 <span class="settings-row-label">Status</span>
                 <span class="status-indicator unknown" id="flareStatus">Checking...</span>
               </div>
+              <div class="settings-row" id="flareMessageRow" style="display: none;">
+                <span class="settings-row-label">Details</span>
+                <span class="settings-row-value" id="flareMessage" style="font-size: 0.85rem;">-</span>
+              </div>
               <div class="settings-row" id="flareVersionRow" style="display: none;">
                 <span class="settings-row-label">Version</span>
                 <span class="settings-row-value" id="flareVersion">-</span>
@@ -110,6 +114,9 @@
               <div class="settings-row" id="flareUrlRow">
                 <span class="settings-row-label">URL</span>
                 <span class="settings-row-value" id="flareUrl" style="font-family: monospace; font-size: 0.85rem;">-</span>
+              </div>
+              <div class="settings-row">
+                <button class="btn-primary" id="flareTestBtn" onclick="checkFlareSolverr(true)" style="padding: 0.45rem 1rem; font-size: 0.85rem;">Test connection</button>
               </div>
               <p style="margin-top: 1rem; font-size: 0.85rem; color: var(--text-muted); line-height: 1.5;">
                 FlareSolverr helps bypass Cloudflare protection when accessing Chaturbate.
@@ -158,6 +165,19 @@
               <div class="settings-row">
                 <span class="settings-row-label">Check Interval</span>
                 <span class="settings-row-value" id="checkInterval">-</span>
+              </div>
+              <div class="settings-row">
+                <div>
+                  <span class="settings-row-label">Max Recording Resolution</span>
+                  <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.25rem;">Cap the height of recorded streams to save disk space. Falls back to the closest lower resolution when the stream has no exact match.</p>
+                </div>
+                <select id="maxResolutionSelect" onchange="updateRecordingSetting('max_resolution', parseInt(this.value))" style="padding: 0.5rem 0.75rem; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; font-size: 0.9rem;">
+                  <option value="0">Best available</option>
+                  <option value="1080">1080p</option>
+                  <option value="720">720p</option>
+                  <option value="480">480p</option>
+                  <option value="360">360p</option>
+                </select>
               </div>
               <div class="settings-row">
                 <div>

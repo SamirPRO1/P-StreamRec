@@ -117,10 +117,28 @@ class Database:
                 ON recordings(username, created_at DESC)
             """)
 
+            # Migrations idempotentes pour schémas existants
+            await self._migrate_schema(db)
+
             await db.commit()
-            
+
         self._initialized = True
         logger.info("Base de données initialisée", db_path=str(self.db_path))
+
+    async def _migrate_schema(self, db):
+        """Ajoute les colonnes manquantes sur les DB existantes (migrations légères)."""
+        migrations = [
+            ("recordings", "conversion_attempts", "INTEGER DEFAULT 0"),
+            ("recordings", "conversion_error", "TEXT"),
+            ("recordings", "last_conversion_attempt", "INTEGER"),
+        ]
+        for table, column, ddl in migrations:
+            try:
+                await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+                logger.info("Migration: colonne ajoutée", table=table, column=column)
+            except Exception:
+                # La colonne existe déjà - SQLite lève "duplicate column"
+                pass
     
     async def add_or_update_model(
         self, 
@@ -317,14 +335,60 @@ class Database:
     async def delete_recording(self, username: str, filename: str):
         """Supprime un enregistrement de la base de données"""
         await self.initialize()
-        
+
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 "DELETE FROM recordings WHERE username = ? AND filename = ?",
                 (username, filename)
             )
             await db.commit()
-    
+
+    async def mark_conversion_failed(self, username: str, filename: str, error: str):
+        """Incrémente le compteur d'échecs et stocke l'erreur pour un enregistrement."""
+        await self.initialize()
+        now = int(datetime.now().timestamp())
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                UPDATE recordings
+                SET conversion_attempts = COALESCE(conversion_attempts, 0) + 1,
+                    conversion_error = ?,
+                    last_conversion_attempt = ?
+                WHERE username = ? AND filename = ?
+                """,
+                (error[:500], now, username, filename)
+            )
+            await db.commit()
+
+    async def reset_conversion_failure(self, recording_id: str) -> bool:
+        """Réinitialise le compteur d'échecs (pour retry manuel). Retourne True si trouvé."""
+        await self.initialize()
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                UPDATE recordings
+                SET conversion_attempts = 0,
+                    conversion_error = NULL,
+                    last_conversion_attempt = NULL
+                WHERE recording_id = ?
+                """,
+                (recording_id,)
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def get_recording_by_id(self, recording_id: str) -> Optional[Dict[str, Any]]:
+        """Récupère un enregistrement par son recording_id."""
+        await self.initialize()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM recordings WHERE recording_id = ? LIMIT 1",
+                (recording_id,)
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
     # ==========================================
     # Chaturbate Auth CRUD
     # ==========================================

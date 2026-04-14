@@ -1043,6 +1043,8 @@ async def list_recordings(username: str, show_ts: bool = False):
             "duration": duration_seconds,
             "duration_str": duration_str,
             "isConverted": is_converted,
+            "conversionAttempts": rec.get('conversion_attempts') or 0,
+            "conversionError": rec.get('conversion_error'),
             "createdAt": created_at,
             "mp4": {
                 "filename": Path(mp4_raw).name,
@@ -1053,6 +1055,25 @@ async def list_recordings(username: str, show_ts: bool = False):
         })
 
     return {"recordings": recordings}
+
+
+@app.post("/api/recordings/{recording_id}/retry-conversion")
+async def retry_conversion(recording_id: str):
+    """Réinitialise le compteur d'échecs pour forcer une nouvelle tentative de conversion."""
+    rec = await db.get_recording_by_id(recording_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="Enregistrement introuvable")
+    if rec.get('is_converted'):
+        return {"success": True, "message": "Déjà converti", "alreadyConverted": True}
+    ts_path = Path(rec.get('file_path', ''))
+    if not ts_path.exists():
+        raise HTTPException(status_code=404, detail="Fichier TS source introuvable")
+    reset = await db.reset_conversion_failure(recording_id)
+    return {
+        "success": reset,
+        "message": "Conversion programmée au prochain scan (~30s)",
+        "recordingId": recording_id
+    }
 
 
 @app.get("/api/all-recordings")
@@ -1733,18 +1754,42 @@ async def get_recording_settings():
     except (ValueError, TypeError):
         auto_delete_threshold = 90
 
+    # Max recording resolution (0 = best available)
+    max_res_val = await db.get_setting("max_resolution")
+    try:
+        max_resolution = int(max_res_val) if max_res_val is not None else 0
+    except (ValueError, TypeError):
+        max_resolution = 0
+
     return {
         "auto_convert": auto_convert,
         "keep_ts": keep_ts,
         "show_ts_files": show_ts_files,
         "auto_delete_watched": auto_delete_watched,
         "auto_delete_threshold": auto_delete_threshold,
+        "max_resolution": max_resolution,
     }
+
+
+# Allowed HLS heights. 0 means "best available".
+_ALLOWED_MAX_RESOLUTIONS = {0, 360, 480, 720, 1080, 1440, 2160}
+
+
+async def _get_max_recording_height() -> Optional[int]:
+    """Return the configured max_resolution as an int, or None for 'best'."""
+    try:
+        raw = await db.get_setting("max_resolution")
+        if raw is None:
+            return None
+        val = int(raw)
+        return val if val > 0 else None
+    except (ValueError, TypeError):
+        return None
 
 
 @app.put("/api/settings/recording")
 async def update_recording_settings(body: dict):
-    """Update recording settings (auto_convert, keep_ts, show_ts_files, auto_delete_watched, auto_delete_threshold)"""
+    """Update recording settings."""
     if "auto_convert" in body:
         await db.set_setting("auto_convert", str(body["auto_convert"]).lower())
     if "keep_ts" in body:
@@ -1756,6 +1801,17 @@ async def update_recording_settings(body: dict):
     if "auto_delete_threshold" in body:
         threshold = max(0, min(100, int(body["auto_delete_threshold"])))
         await db.set_setting("auto_delete_threshold", str(threshold))
+    if "max_resolution" in body:
+        try:
+            max_res = int(body["max_resolution"])
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="max_resolution must be an integer")
+        if max_res not in _ALLOWED_MAX_RESOLUTIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"max_resolution must be one of {sorted(_ALLOWED_MAX_RESOLUTIONS)}"
+            )
+        await db.set_setting("max_resolution", str(max_res))
 
     # Return current state
     return await get_recording_settings()
@@ -2057,10 +2113,13 @@ async def auto_record_task():
                     try:
                         hls_source = None
 
+                        # Récupère la résolution max configurée par l'utilisateur
+                        max_height = await _get_max_recording_height()
+
                         # Try async resolver first (uses authenticated API)
                         try:
-                            from .resolvers.chaturbate import resolve_m3u8_async
-                            hls_source = await resolve_m3u8_async(username)
+                            from .resolvers.chaturbate import resolve_m3u8_async, _resolve_variant
+                            hls_source = await resolve_m3u8_async(username, max_height=max_height)
                         except Exception:
                             pass
 
@@ -2075,6 +2134,13 @@ async def auto_record_task():
                             if resp.status_code == 200:
                                 data = resp.json()
                                 hls_source = data.get('hls_source')
+                                # Appliquer la contrainte de résolution sur l'URL master si possible
+                                if hls_source and max_height:
+                                    try:
+                                        from .resolvers.chaturbate import _resolve_variant
+                                        hls_source = await _resolve_variant(hls_source, max_height=max_height)
+                                    except Exception:
+                                        pass
 
                         if hls_source:
                             # Lancer l'enregistrement

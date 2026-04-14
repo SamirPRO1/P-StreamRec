@@ -20,19 +20,75 @@ class FlareSolverrClient:
         self._cache_expires_at: float = 0
 
     async def is_available(self) -> bool:
-        """Check if FlareSolverr is healthy"""
+        """Check if FlareSolverr is healthy (shortcut, returns bool only)."""
+        status = await self.check_status()
+        return status["available"]
+
+    async def check_status(self) -> Dict[str, Any]:
+        """
+        Check FlareSolverr health and return structured status.
+
+        Returns dict with keys: available (bool), message (str), url (str), version (str|None).
+        """
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     f"{self.base_url}/health",
-                    timeout=aiohttp.ClientTimeout(total=5)
+                    timeout=aiohttp.ClientTimeout(total=10)
                 ) as resp:
-                    if resp.status == 200:
+                    if resp.status != 200:
+                        return {
+                            "available": False,
+                            "message": f"HTTP {resp.status}",
+                            "url": self.base_url,
+                            "version": None,
+                        }
+                    try:
                         data = await resp.json()
-                        return data.get("msg") == "FlareSolverr is ready!"
+                    except Exception:
+                        return {
+                            "available": False,
+                            "message": "Invalid JSON response",
+                            "url": self.base_url,
+                            "version": None,
+                        }
+                    if data.get("msg") == "FlareSolverr is ready!":
+                        return {
+                            "available": True,
+                            "message": "Ready",
+                            "url": self.base_url,
+                            "version": data.get("version"),
+                        }
+                    return {
+                        "available": False,
+                        "message": data.get("msg") or "Unknown status",
+                        "url": self.base_url,
+                        "version": data.get("version"),
+                    }
+        except asyncio.TimeoutError:
+            logger.debug("FlareSolverr timeout", url=self.base_url)
+            return {
+                "available": False,
+                "message": "Timeout after 10s (FlareSolverr may be starting up)",
+                "url": self.base_url,
+                "version": None,
+            }
+        except aiohttp.ClientConnectorError as e:
+            logger.debug("FlareSolverr unreachable", url=self.base_url, error=str(e))
+            return {
+                "available": False,
+                "message": f"Cannot connect: {e}",
+                "url": self.base_url,
+                "version": None,
+            }
         except Exception as e:
-            logger.debug("FlareSolverr not available", error=str(e))
-        return False
+            logger.debug("FlareSolverr error", error=str(e))
+            return {
+                "available": False,
+                "message": f"Error: {e}",
+                "url": self.base_url,
+                "version": None,
+            }
 
     async def solve_challenge(self, url: str) -> Optional[Dict[str, Any]]:
         """

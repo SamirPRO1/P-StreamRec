@@ -22,13 +22,17 @@ def set_chaturbate_api(api):
     _chaturbate_api = api
 
 
-async def resolve_m3u8_async(username: str) -> str:
+async def resolve_m3u8_async(username: str, max_height: Optional[int] = None) -> str:
     """
     Async M3U8 resolver with authentication support.
     Resolution chain:
     1. Authenticated get_edge_hls_url (if available)
     2. chatvideocontext API
     3. HTML scraping fallback
+
+    Args:
+        username: target model
+        max_height: optional max resolution (e.g. 720). None = best available.
     """
     logger.subsection(f"Résolution M3U8 async - {username}")
 
@@ -42,7 +46,7 @@ async def resolve_m3u8_async(username: str) -> str:
             hls_url = await _chaturbate_api.get_edge_hls_url(username)
             if hls_url:
                 logger.success("M3U8 résolu via API authentifiée", username=username)
-                return await _resolve_best_quality(hls_url)
+                return await _resolve_variant(hls_url, max_height=max_height)
         except Exception as e:
             logger.debug("Auth resolution failed, falling back", error=str(e))
 
@@ -50,8 +54,65 @@ async def resolve_m3u8_async(username: str) -> str:
     return resolve_m3u8(username)
 
 
-async def _resolve_best_quality(m3u8_url: str) -> str:
-    """If URL is a master playlist, extract the highest quality variant"""
+def _parse_master_playlist(text: str):
+    """Parse a master HLS playlist.
+
+    Returns a list of {url, width, height, bandwidth} for each variant.
+    Variants without RESOLUTION info keep height=0 (sorted last).
+    """
+    variants = []
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        if line.startswith("#EXT-X-STREAM-INF"):
+            attrs = {}
+            res_match = re.search(r'RESOLUTION=(\d+)x(\d+)', line)
+            bw_match = re.search(r'BANDWIDTH=(\d+)', line)
+            if res_match:
+                attrs["width"] = int(res_match.group(1))
+                attrs["height"] = int(res_match.group(2))
+            if bw_match:
+                attrs["bandwidth"] = int(bw_match.group(1))
+            # Next non-comment line is the URL
+            j = i + 1
+            while j < len(lines) and (not lines[j].strip() or lines[j].strip().startswith("#")):
+                j += 1
+            if j < len(lines):
+                attrs["url"] = lines[j].strip()
+                variants.append(attrs)
+                i = j + 1
+                continue
+        i += 1
+    return variants
+
+
+def _pick_variant(variants, max_height: Optional[int]):
+    """Pick a variant URL given a max height constraint.
+
+    - max_height None or <=0: highest resolution, highest bandwidth.
+    - max_height set: best variant whose height <= max_height. Fallback to the
+      lowest-resolution variant if all are taller.
+    - On ties (same height), prefer highest bandwidth.
+    """
+    if not variants:
+        return None
+
+    def sort_key(v):
+        return (v.get("height", 0), v.get("bandwidth", 0))
+
+    if not max_height or max_height <= 0:
+        return sorted(variants, key=sort_key, reverse=True)[0]["url"]
+
+    eligible = [v for v in variants if v.get("height", 0) <= max_height]
+    if eligible:
+        return sorted(eligible, key=sort_key, reverse=True)[0]["url"]
+    # Nothing fits — return the smallest to save bandwidth
+    return sorted(variants, key=sort_key)[0]["url"]
+
+
+async def _resolve_variant(m3u8_url: str, max_height: Optional[int] = None) -> str:
+    """If URL is a master playlist, pick a variant according to max_height."""
     if 'playlist.m3u8' not in m3u8_url:
         return m3u8_url
 
@@ -66,16 +127,24 @@ async def _resolve_best_quality(m3u8_url: str) -> str:
             ) as resp:
                 if resp.status == 200:
                     text = await resp.text()
-                    lines = text.strip().split('\n')
-                    for line in reversed(lines):
-                        line = line.strip()
-                        if line and not line.startswith('#'):
-                            base_url = m3u8_url.rsplit('/', 1)[0]
-                            return f"{base_url}/{line}"
+                    variants = _parse_master_playlist(text)
+                    picked = _pick_variant(variants, max_height)
+                    if picked:
+                        base_url = m3u8_url.rsplit('/', 1)[0]
+                        logger.debug("HLS variant picked",
+                                    max_height=max_height,
+                                    variant=picked,
+                                    candidates=len(variants))
+                        return f"{base_url}/{picked}"
     except Exception as e:
-        logger.debug("Could not extract best quality from playlist", error=str(e))
+        logger.debug("Could not extract variant from playlist", error=str(e))
 
     return m3u8_url
+
+
+# Backwards-compatible alias
+async def _resolve_best_quality(m3u8_url: str) -> str:
+    return await _resolve_variant(m3u8_url, max_height=None)
 
 
 def resolve_m3u8(username: str) -> str:

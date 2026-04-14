@@ -78,7 +78,13 @@ async def sync_following():
     models = await _chaturbate_api.get_followed_models()
 
     if not models:
-        return {"synced": 0, "message": "No models found or fetch failed"}
+        # Diagnose the reason so users know what to fix
+        cookies = _auth_service.api.auth.get_cookies() if hasattr(_auth_service, 'api') else {}
+        if not _chaturbate_api.auth.get_cookies().get("sessionid"):
+            reason = "Chaturbate session expired — please log in again from Settings"
+        else:
+            reason = "Chaturbate returned 0 followed models (session may be invalid or rate-limited)"
+        return {"synced": 0, "message": reason}
 
     # Upsert all models (preserves old thumbnail_url via COALESCE when new value is None)
     synced_usernames = set()

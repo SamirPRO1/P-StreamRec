@@ -44,12 +44,18 @@ async def chaturbate_status():
     if _auth_service:
         status = _auth_service.get_status()
 
-    flaresolverr_available = False
+    # Live check FlareSolverr (no cache) so UI reflects current state + error message
     if _flaresolverr:
-        flaresolverr_available = await _flaresolverr.is_available()
-
-    status["flaresolverrAvailable"] = flaresolverr_available
-    status["flaresolverrUrl"] = _flaresolverr.base_url if _flaresolverr else None
+        fs_status = await _flaresolverr.check_status()
+        status["flaresolverrAvailable"] = fs_status["available"]
+        status["flaresolverrMessage"] = fs_status["message"]
+        status["flaresolverrUrl"] = fs_status["url"]
+        status["flaresolverrVersion"] = fs_status.get("version")
+    else:
+        status["flaresolverrAvailable"] = False
+        status["flaresolverrMessage"] = "Not configured"
+        status["flaresolverrUrl"] = None
+        status["flaresolverrVersion"] = None
     return status
 
 

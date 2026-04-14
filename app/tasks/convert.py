@@ -9,6 +9,9 @@ from typing import Optional
 from ..logger import logger
 from ..core.config import AUTO_CONVERT, KEEP_TS
 
+# Nombre maximal de tentatives de conversion avant skip automatique
+MAX_CONVERSION_ATTEMPTS = 3
+
 
 async def convert_ts_to_mp4(
     ts_path: Path, 
@@ -266,10 +269,23 @@ async def auto_convert_recordings_task(db, output_dir: Path, ffmpeg_manager, ffm
                                       filename=ts_file.name)
                         continue
 
+                    # Skip si trop de tentatives ratées pour ce fichier
+                    recordings = await db.get_recordings(username)
+                    existing = next((r for r in recordings if r['filename'] == ts_file.name), None)
+                    attempts = (existing or {}).get('conversion_attempts') or 0
+                    if attempts >= MAX_CONVERSION_ATTEMPTS:
+                        logger.debug("Conversion skippée (trop d'échecs)",
+                                   username=username,
+                                   filename=ts_file.name,
+                                   attempts=attempts,
+                                   task="auto-convert")
+                        continue
+
                     # Le fichier n'est pas en cours d'enregistrement, on peut le convertir
                     logger.info("Début conversion automatique",
                               username=username,
                               filename=ts_file.name,
+                              attempt=attempts + 1,
                               task="auto-convert")
 
                     success, mp4_path_result, mp4_size = await convert_ts_to_mp4(
@@ -284,6 +300,10 @@ async def auto_convert_recordings_task(db, output_dir: Path, ffmpeg_manager, ffm
                         existing = next((r for r in recordings if r['filename'] == ts_file.name), None)
 
                         recording_id = existing.get('recording_id') if existing else f"{username}_{ts_file.stem}"
+
+                        # Reset compteur d'échec car la conversion a réussi
+                        if (existing or {}).get('conversion_attempts'):
+                            await db.reset_conversion_failure(recording_id)
 
                         # Recalculer la durée sur le fichier MP4 maintenant qu'il est stable
                         from .monitor import get_video_duration
@@ -335,9 +355,28 @@ async def auto_convert_recordings_task(db, output_dir: Path, ffmpeg_manager, ffm
                                      filename=ts_file.name,
                                      mp4_file=mp4_path_result.name)
                     else:
+                        # Tracker l'échec en DB pour éviter les retries infinis et informer l'UI
+                        # S'assurer que l'enregistrement existe d'abord
+                        if not existing:
+                            from .monitor import get_video_duration
+                            duration = await get_video_duration(ts_path, ffmpeg_path)
+                            recording_id = f"{username}_{ts_file.stem}"
+                            await db.add_or_update_recording(
+                                username=username,
+                                filename=ts_file.name,
+                                file_path=str(ts_path),
+                                file_size=ts_path.stat().st_size,
+                                recording_id=recording_id,
+                                duration_seconds=duration if duration > 0 else 0,
+                                is_converted=False
+                            )
+                        error_msg = f"FFmpeg conversion failed (attempt {attempts + 1}/{MAX_CONVERSION_ATTEMPTS})"
+                        await db.mark_conversion_failed(username, ts_file.name, error_msg)
                         logger.error("Échec conversion",
                                    username=username,
-                                   filename=ts_file.name)
+                                   filename=ts_file.name,
+                                   attempt=attempts + 1,
+                                   max_attempts=MAX_CONVERSION_ATTEMPTS)
 
                     # Attendre un peu entre chaque conversion pour éviter surcharge
                     await asyncio.sleep(5)

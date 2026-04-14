@@ -372,7 +372,12 @@ class ChaturbateAPI:
         }
 
     async def _toggle_follow(self, username: str, action: str) -> bool:
-        """Follow or unfollow a model on Chaturbate (requires auth)"""
+        """Follow or unfollow a model on Chaturbate (requires auth).
+
+        Verifies the action actually took effect by re-checking is_following()
+        afterwards, because Chaturbate sometimes returns 200 even when an
+        anti-bot layer silently drops the request.
+        """
         if not self.auth.get_cookies().get("sessionid"):
             logger.warning(f"Cannot {action}: not logged in")
             return False
@@ -391,11 +396,23 @@ class ChaturbateAPI:
             data = f"room_slug={username}"
             resp = await self._request("POST", url, headers=headers, data=data)
 
-            if resp and resp.status == 200:
-                logger.info(f"{action.capitalize()}ed model on Chaturbate", username=username)
-                return True
-            logger.warning(f"Failed to {action} model", username=username,
-                          status=resp.status if resp else None)
+            if not resp or resp.status != 200:
+                logger.warning(f"Failed to {action} model", username=username,
+                              status=resp.status if resp else None)
+                return False
+
+            # Verify the state server-side (anti-bot sometimes returns 200 then drops)
+            expected = (action == "follow")
+            actual = await self.is_following(username)
+            if actual != expected:
+                logger.warning(
+                    f"{action} returned 200 but state did not change (silent failure)",
+                    username=username, expected=expected, actual=actual,
+                )
+                return False
+
+            logger.info(f"{action.capitalize()}ed model on Chaturbate", username=username)
+            return True
         except Exception as e:
             logger.error(f"Error {action}ing model", username=username, error=str(e))
         return False

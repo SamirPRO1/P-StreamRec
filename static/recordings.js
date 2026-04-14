@@ -189,6 +189,15 @@ async function showModelRecordings(username) {
         resumeBadge += '<div class="progress-bar"><div class="progress-fill" style="width:' + pct + '%"></div></div>';
       }
 
+      // Badge conversion failure + bouton retry
+      var failBadge = '';
+      var retryBtn = '';
+      if (!rec.isConverted && (rec.conversionAttempts || 0) > 0) {
+        var errMsg = rec.conversionError ? escapeHtml(rec.conversionError) : 'Conversion failed';
+        failBadge = '<div class="conversion-fail-badge" title="' + errMsg + '">&#9888; Conversion failed (' + rec.conversionAttempts + ')</div>';
+        retryBtn = '<button class="rec-action-btn" onclick="event.stopPropagation(); retryConversion(\'' + escapeHtml(recId) + '\', this)" title="Retry conversion">&#8635;</button>';
+      }
+
       return '<div class="recording-item" onclick="playRecording(\'' + escapeHtml(username) + '\', \'' + escapeHtml(rec.filename) + '\', \'' + escapeHtml(recId) + '\')">' +
         '<div class="recording-item-thumb">' +
           '<img src="' + escapeHtml(thumbUrl) + '" alt="" loading="lazy" ' +
@@ -200,9 +209,11 @@ async function showModelRecordings(username) {
           '<div class="recording-meta">' +
             '<span>' + (rec.size_display || formatSize(rec.size)) + '</span>' +
           '</div>' +
+          failBadge +
           resumeBadge +
         '</div>' +
         '<div class="recording-item-actions">' +
+          retryBtn +
           '<button class="rec-action-btn" onclick="event.stopPropagation(); downloadRecording(\'' + escapeHtml(username) + '\', \'' + escapeHtml(rec.filename) + '\')" title="Download">&#11015;</button>' +
           '<button class="rec-action-btn danger" onclick="event.stopPropagation(); deleteRecording(\'' + escapeHtml(username) + '\', \'' + escapeHtml(rec.filename) + '\', this)" title="Delete">&#128465;</button>' +
         '</div>' +
@@ -372,6 +383,36 @@ async function closePlayer() {
   currentPlayingRecordingId = '';
   currentPlayingUsername = '';
   currentPlayingFilename = '';
+}
+
+// ============================================
+// Retry TS -> MP4 conversion manually
+// ============================================
+async function retryConversion(recordingId, btn) {
+  if (!recordingId) return;
+  btn.disabled = true;
+  btn.innerHTML = '&#8987;';
+  try {
+    var res = await fetch('/api/recordings/' + encodeURIComponent(recordingId) + '/retry-conversion', {
+      method: 'POST'
+    });
+    var data = await res.json().catch(function () { return {}; });
+    if (res.ok) {
+      showNotification(data.message || 'Conversion retry scheduled', 'success');
+      if (currentDetailUser) {
+        setTimeout(function () { showModelRecordings(currentDetailUser); }, 500);
+      }
+    } else {
+      showNotification(data.detail || 'Failed to retry conversion', 'error');
+      btn.disabled = false;
+      btn.innerHTML = '&#8635;';
+    }
+  } catch (e) {
+    console.error('Error retrying conversion:', e);
+    showNotification('Connection error', 'error');
+    btn.disabled = false;
+    btn.innerHTML = '&#8635;';
+  }
 }
 
 // ============================================
