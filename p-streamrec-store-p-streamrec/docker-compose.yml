@@ -12,13 +12,23 @@ services:
     environment:
       - LOG_LEVEL=info
       - TZ=${TZ:-UTC}
+    # Wait for the HTTP server to actually accept connections before
+    # p-streamrec starts. Without this, p-streamrec races FlareSolverr's
+    # startup and logs "not available" even though it recovers moments later.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8191/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
 
   web:
     image: ghcr.io/raccommode/p-streamrec:latest
     restart: on-failure
     stop_grace_period: 1m
     depends_on:
-      - flaresolverr
+      flaresolverr:
+        condition: service_healthy
     environment:
       - OUTPUT_DIR=/data
       - PORT=8080

@@ -2303,13 +2303,34 @@ async def startup_event():
     # Migrer les données depuis le JSON si nécessaire
     await db.migrate_from_json(MODELS_FILE)
 
-    # Initialize FlareSolverr client
+    # Initialize FlareSolverr client.
+    # The docker-compose healthcheck normally guarantees FlareSolverr is
+    # ready before we start, but we keep a short retry loop as a safety net
+    # for bare-metal / non-compose deployments.
     flaresolverr = FlareSolverrClient(FLARESOLVERR_URL)
-    fs_available = await flaresolverr.is_available()
-    if fs_available:
-        logger.info("FlareSolverr connecté", url=FLARESOLVERR_URL)
+    fs_status = None
+    for attempt in range(6):  # ~15s max (6 tries × 2.5s sleep between)
+        fs_status = await flaresolverr.check_status()
+        if fs_status["available"]:
+            break
+        if attempt < 5:
+            await asyncio.sleep(2.5)
+
+    if fs_status and fs_status["available"]:
+        logger.info(
+            "FlareSolverr connecté",
+            url=FLARESOLVERR_URL,
+            version=fs_status.get("version"),
+        )
     else:
-        logger.info("FlareSolverr non disponible (optionnel)", url=FLARESOLVERR_URL)
+        # Log the actual reason so users can diagnose DNS / network / timing
+        # issues without having to dig through DEBUG logs.
+        reason = (fs_status or {}).get("message") or "unknown"
+        logger.warning(
+            "FlareSolverr non disponible (optionnel)",
+            url=FLARESOLVERR_URL,
+            reason=reason,
+        )
 
     # Initialize Chaturbate auth service
     cb_auth = ChaturbateAuthService(db, flaresolverr)
