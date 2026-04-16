@@ -649,15 +649,8 @@
           <span id="theaterIcon">🎬</span>
           <span id="theaterText">Theater Mode</span>
         </button>
-        <video id="player" class="video-player" muted autoplay></video>
+        <video id="player" class="video-player" muted autoplay controls></video>
         <span class="live-badge">&#9679; LIVE</span>
-        <div class="live-controls" id="liveControls">
-          <button class="live-ctrl-btn" id="livePlayPauseBtn" onclick="liveTogglePlayPause()" title="Play/Pause">&#9646;&#9646;</button>
-          <button class="live-ctrl-btn" id="liveMuteBtn" onclick="liveToggleMute()" title="Mute/Unmute">&#128263;</button>
-          <input type="range" class="live-volume-slider" id="liveVolumeSlider" min="0" max="1" step="0.05" value="0.7" oninput="liveChangeVolume(this.value)" />
-          <div class="live-ctrl-spacer"></div>
-          <button class="live-ctrl-btn" id="liveFullscreenBtn" onclick="liveToggleFullscreen()" title="Fullscreen">&#x26F6;</button>
-        </div>
         <div class="quality-selector" id="qualitySelector" style="display: none;">
           <label for="qualitySelect">Quality:</label>
           <select id="qualitySelect" onchange="changeQuality(this.value)">
@@ -1501,62 +1494,18 @@
     });
     
     // ============================================
-    // Live Player Controls (no seek bar)
+    // Live Player: use native browser controls
     // ============================================
-
-    window.liveTogglePlayPause = function() {
-      const video = document.getElementById('player');
-      const btn = document.getElementById('livePlayPauseBtn');
-      if (video.paused) {
-        video.play().catch(() => {});
-        btn.innerHTML = '&#9646;&#9646;';
-      } else {
-        video.pause();
-        btn.innerHTML = '&#9654;';
-      }
-    };
-
-    window.liveToggleMute = function() {
-      const video = document.getElementById('player');
-      const btn = document.getElementById('liveMuteBtn');
-      const slider = document.getElementById('liveVolumeSlider');
-      video.muted = !video.muted;
-      if (video.muted) {
-        btn.innerHTML = '&#128263;';
-        slider.value = 0;
-      } else {
-        btn.innerHTML = '&#128266;';
-        slider.value = video.volume;
-      }
-    };
-
-    window.liveChangeVolume = function(val) {
-      const video = document.getElementById('player');
-      const btn = document.getElementById('liveMuteBtn');
-      video.volume = parseFloat(val);
-      video.muted = (parseFloat(val) === 0);
-      btn.innerHTML = (video.muted || parseFloat(val) === 0) ? '&#128263;' : '&#128266;';
-      if (!video.muted && video.volume > 0) {
-        saveVolume(video.volume);
-      }
-    };
-
-    window.liveToggleFullscreen = function() {
-      const container = document.getElementById('playerContainer');
-      if (document.fullscreenElement) {
-        document.exitFullscreen();
-      } else {
-        container.requestFullscreen().catch(() => {});
-      }
-    };
-
-    // Sync play/pause button with video state + click to toggle
+    // The <video controls> attribute provides play/pause/volume/fullscreen
+    // natively. We only persist volume & mute state across sessions here.
     (function() {
       const video = document.getElementById('player');
-      const btn = document.getElementById('livePlayPauseBtn');
-      video.addEventListener('play', () => { btn.innerHTML = '&#9646;&#9646;'; });
-      video.addEventListener('pause', () => { btn.innerHTML = '&#9654;'; });
-      video.addEventListener('click', () => { liveTogglePlayPause(); });
+      if (!video) return;
+      video.addEventListener('volumechange', () => {
+        if (!video.muted && video.volume > 0) {
+          saveVolume(video.volume);
+        }
+      });
     })();
 
     // ============================================
@@ -1579,46 +1528,34 @@
       return 0.5;
     }
     
-    // Setup volume management on video player
+    // Setup volume management on video player (native <video controls>)
     function setupVolumeManagement() {
       const video = document.getElementById('player');
-      const slider = document.getElementById('liveVolumeSlider');
-      const muteBtn = document.getElementById('liveMuteBtn');
       if (!video) return;
 
-      // Get saved volume
+      // Restore saved volume, start muted for autoplay policy
       const savedVolume = getSavedVolume();
-
-      // Set saved volume and start muted
       video.volume = savedVolume;
       video.muted = true;
-      if (slider) slider.value = 0;
 
       let wasMuted = true;
 
-      // Listen for mute/unmute changes
       video.addEventListener('volumechange', () => {
-        // User just unmuted
+        // When the user unmutes via the native controls, restore saved volume
         if (wasMuted && !video.muted) {
           const currentSaved = getSavedVolume();
           video.volume = currentSaved;
-          if (slider) slider.value = currentSaved;
-          if (muteBtn) muteBtn.innerHTML = '&#128266;';
           console.log('🔊 Unmuted, restored volume to:', currentSaved);
         }
 
-        // Save volume when user adjusts slider (only if unmuted)
+        // Persist as the user adjusts the native volume slider
         if (!video.muted && video.volume > 0) {
           saveVolume(video.volume);
         }
 
-        // Sync slider and mute icon
-        if (slider) slider.value = video.muted ? 0 : video.volume;
-        if (muteBtn) muteBtn.innerHTML = (video.muted || video.volume === 0) ? '&#128263;' : '&#128266;';
-        
         wasMuted = video.muted;
       });
-      
+
       console.log('🔊 Volume management ready. Saved volume:', savedVolume);
     }
 
