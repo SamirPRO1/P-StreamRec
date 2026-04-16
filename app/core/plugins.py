@@ -337,7 +337,8 @@ class PluginManager:
 
     async def _ensure_official_repo(self) -> None:
         repos = await self.list_repos()
-        if not any(r.id == OFFICIAL_REPO_ID for r in repos):
+        existing = next((r for r in repos if r.id == OFFICIAL_REPO_ID), None)
+        if existing is None:
             repos.insert(
                 0,
                 RepoConfig(
@@ -349,6 +350,18 @@ class PluginManager:
                 ),
             )
             await self._save_repos(repos)
+        elif existing.index_url != OFFICIAL_REPO_INDEX_URL:
+            # Migration: l'URL canonique a changé (ex: plugins-registry → plugins).
+            # Forcer la mise à jour pour que les installs pointent au bon endroit.
+            existing.index_url = OFFICIAL_REPO_INDEX_URL
+            existing.verified = True
+            existing.builtin = True
+            self._catalog_cache.pop(OFFICIAL_REPO_ID, None)
+            await self._save_repos(repos)
+            logger.info(
+                "URL du dépôt officiel mise à jour",
+                new_url=OFFICIAL_REPO_INDEX_URL,
+            )
 
     async def list_repos(self) -> List[RepoConfig]:
         raw = await self.db.get_setting(SETTINGS_KEY_REPOS)

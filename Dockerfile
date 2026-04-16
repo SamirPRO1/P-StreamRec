@@ -24,6 +24,7 @@ RUN pip install --no-cache-dir -r requirements.txt && \
 # Copy source
 COPY app ./app
 COPY static ./static
+COPY plugins ./plugins
 COPY README.md ./
 
 # Create data volume for recordings
