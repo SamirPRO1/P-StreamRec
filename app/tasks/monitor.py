@@ -373,45 +373,70 @@ async def update_recordings_cache(db: 'Database', username: str, output_dir: Pat
 async def monitor_models_task(
     db: 'Database',
     manager: 'FFmpegManager',
-    ffmpeg_path: str = "ffmpeg"
+    ffmpeg_path: str = "ffmpeg",
+    plugin_manager=None,
 ):
     """
-    Tâche de monitoring en arrière-plan
-    Vérifie continuellement l'état des modèles et génère les miniatures
+    Tâche de monitoring en arrière-plan.
+
+    Pour chaque modèle, utilise le plugin correspondant (via le registry) pour
+    vérifier son statut. Fallback sur check_model_status direct pour Chaturbate
+    si le plugin manager n'est pas disponible (démarrage transitoire).
     """
     logger.background_task("monitor", "Démarrage du monitoring continu")
-    
-    # Récupérer le csrftoken depuis les variables d'environnement
+
     csrftoken = os.getenv("CHATURBATE_CSRFTOKEN")
     if csrftoken:
         logger.info("CSRF token détecté", has_token=True)
-    
-    # Initialiser la base de données
+
     await db.initialize()
-    
-    # Créer une session HTTP persistante
+
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                # Récupérer tous les modèles depuis la DB
                 models = await db.get_all_models()
-                
+
                 if not models:
                     await asyncio.sleep(MONITOR_INTERVAL)
                     continue
-                
+
                 logger.debug("Vérification des modèles", count=len(models))
-                
-                # Récupérer les sessions actives
+
                 active_sessions = manager.list_status()
-                
-                # Vérifier chaque modèle
+
                 for model in models:
                     username = model['username']
-                    
+                    source_type = model.get('source_type') or 'chaturbate'
+
                     try:
-                        # Vérifier le statut en ligne
-                        status = await check_model_status(session, username, csrftoken)
+                        # Résolution du statut via le plugin approprié
+                        if plugin_manager is not None:
+                            loaded = plugin_manager.registry.get(source_type)
+                            if loaded is None:
+                                logger.debug(
+                                    "Plugin introuvable, skip monitor",
+                                    username=username,
+                                    source_type=source_type,
+                                )
+                                continue
+                            try:
+                                model_status = await loaded.instance.check_status(username)
+                                status = {
+                                    'is_online': model_status.is_online,
+                                    'viewers': model_status.viewers,
+                                    'hls_source': model_status.hls_source,
+                                }
+                            except Exception as e:
+                                logger.debug(
+                                    "check_status plugin error",
+                                    plugin=loaded.manifest.id,
+                                    username=username,
+                                    error=str(e),
+                                )
+                                status = {'is_online': False, 'viewers': 0, 'hls_source': None}
+                        else:
+                            # Fallback direct Chaturbate (startup transitoire)
+                            status = await check_model_status(session, username, csrftoken)
                         
                         # Vérifier si en cours d'enregistrement
                         active_session = next(

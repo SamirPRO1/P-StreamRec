@@ -31,6 +31,10 @@ from .services.chaturbate_api import ChaturbateAPI
 from .api import auth as auth_router
 from .api import discover as discover_router
 from .api import following as following_router
+from .api import plugins as plugins_router
+from .core.plugins import PluginManager
+from .core.chaturbate_builtin import plugin as chaturbate_builtin_plugin
+from .core.plugin_base import PluginResolveError
 
 # Environment
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -195,6 +199,7 @@ app.add_middleware(
 app.include_router(auth_router.router)
 app.include_router(discover_router.router)
 app.include_router(following_router.router)
+app.include_router(plugins_router.router)
 
 # Static mounts
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -321,6 +326,9 @@ db = Database(DB_FILE)
 
 # Chaturbate API (initialized at startup)
 chaturbate_api: Optional[ChaturbateAPI] = None
+
+# Plugin manager (initialized at startup)
+plugin_manager: Optional[PluginManager] = None
 
 # Fichier de sauvegarde des modèles (côté serveur)
 MODELS_FILE = OUTPUT_DIR / "models.json"
@@ -708,36 +716,47 @@ async def api_start(body: StartBody):
         logger.info("URL M3U8 directe détectée", url=target[:80])
         m3u8_url = target
     else:
-        logger.subsection("Résolution Chaturbate")
-        # Try chaturbate if allowed or explicit
-        if stype in ("", "chaturbate"):
-            if not CB_RESOLVER_ENABLED:
-                logger.error("Chaturbate Resolver désactivé", CB_RESOLVER_ENABLED=False)
-                raise HTTPException(status_code=400, detail="Résolution Chaturbate désactivée. Fournissez une URL m3u8 directe ou activez CB_RESOLVER_ENABLED.")
-            try:
-                logger.progress("Appel Chaturbate Resolver", username=target)
-                from .resolvers.chaturbate import resolve_m3u8_async, resolve_m3u8 as resolve_chaturbate
-                # Try async resolver first (authenticated)
-                try:
-                    m3u8_url = await resolve_m3u8_async(target)
-                except Exception:
-                    m3u8_url = resolve_chaturbate(target)
-                if not m3u8_url:
-                    logger.error("Resolver retourné None", username=target)
-                    raise HTTPException(status_code=400, detail=f"Impossible de trouver le flux pour {target}")
-                logger.success("M3U8 résolu", username=target, url=m3u8_url[:80])
-                if not person:
-                    person = target  # username
-                    logger.debug("Person défini depuis target", person=person)
-            except HTTPException:
-                raise
-            except Exception as e:
-                error_detail = f"Échec résolution Chaturbate pour {target}: {str(e)}"
-                logger.error(error_detail, exc_info=True, username=target)
-                raise HTTPException(status_code=400, detail=error_detail)
-        else:
-            logger.error("Source type invalide", source_type=stype)
-            raise HTTPException(status_code=400, detail="source_type invalide. Utilisez 'm3u8' ou 'chaturbate'.")
+        effective_source = stype or "chaturbate"
+        loaded = plugin_manager.registry.get(effective_source) if plugin_manager else None
+        if loaded is None:
+            known = ", ".join(plugin_manager.registry.list_source_types()) if plugin_manager else ""
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"source_type '{effective_source}' inconnu. "
+                    f"Installez le plugin correspondant. "
+                    f"Disponibles: {known or 'aucun'}"
+                ),
+            )
+        if effective_source == "chaturbate" and not CB_RESOLVER_ENABLED:
+            logger.error("Chaturbate Resolver désactivé", CB_RESOLVER_ENABLED=False)
+            raise HTTPException(
+                status_code=400,
+                detail="Résolution Chaturbate désactivée. Fournissez une URL m3u8 directe ou activez CB_RESOLVER_ENABLED.",
+            )
+        logger.subsection(f"Résolution via plugin '{loaded.manifest.id}'")
+        try:
+            max_height = await _get_max_recording_height()
+            result = await loaded.instance.resolve(target, max_height=max_height)
+            m3u8_url = result.m3u8_url
+            if not m3u8_url:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Impossible de trouver le flux pour {target}",
+                )
+            logger.success("M3U8 résolu", username=target, url=m3u8_url[:80])
+            if not person:
+                person = target
+                logger.debug("Person défini depuis target", person=person)
+        except HTTPException:
+            raise
+        except PluginResolveError as e:
+            logger.error("Plugin resolve error", plugin=loaded.manifest.id, error=str(e))
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            error_detail = f"Échec résolution via plugin '{loaded.manifest.id}': {str(e)}"
+            logger.error(error_detail, exc_info=True, username=target)
+            raise HTTPException(status_code=400, detail=error_detail)
 
     # If person still not set (direct m3u8), infer from URL
     if not person:
@@ -852,13 +871,27 @@ async def get_model_status(username: str):
 async def get_model_stream(username: str):
     """Récupère l'URL du stream live pour un modèle (fonctionne même sans être dans le cache local)"""
     try:
-        # Résoudre l'URL du stream directement via Chaturbate (pas de vérification cache)
-        from .resolvers.chaturbate import resolve_m3u8_async
+        # Résolution via le registry (le source_type est lu depuis le modèle s'il existe)
+        source_type = "chaturbate"
         try:
-            m3u8_url = await resolve_m3u8_async(username)
+            model = await db.get_model(username)
+            if model and model.get("source_type"):
+                source_type = model["source_type"]
         except Exception:
-            from .resolvers.chaturbate import resolve_m3u8 as resolve_chaturbate
-            m3u8_url = resolve_chaturbate(username)
+            pass
+
+        loaded = plugin_manager.registry.get(source_type) if plugin_manager else None
+        if loaded is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Plugin '{source_type}' non disponible",
+            )
+        try:
+            max_height = await _get_max_recording_height()
+            result = await loaded.instance.resolve(username, max_height=max_height)
+            m3u8_url = result.m3u8_url
+        except PluginResolveError as e:
+            raise HTTPException(status_code=404, detail=str(e))
 
         if not m3u8_url:
             raise HTTPException(status_code=404, detail=f"Impossible de trouver le flux pour {username}")
@@ -2115,38 +2148,38 @@ async def auto_record_task():
                 cached_status = await db.get_model(username)
                 
                 if cached_status and cached_status.get('is_online'):
-                    # Modèle en ligne selon le cache, résoudre le flux HLS
+                    # Modèle en ligne selon le cache, résoudre le flux HLS via le plugin
                     try:
                         hls_source = None
-
-                        # Récupère la résolution max configurée par l'utilisateur
                         max_height = await _get_max_recording_height()
 
-                        # Try async resolver first (uses authenticated API)
-                        try:
-                            from .resolvers.chaturbate import resolve_m3u8_async, _resolve_variant
-                            hls_source = await resolve_m3u8_async(username, max_height=max_height)
-                        except Exception:
-                            pass
+                        source_type = cached_status.get("source_type") or "chaturbate"
+                        loaded = (
+                            plugin_manager.registry.get(source_type)
+                            if plugin_manager
+                            else None
+                        )
+                        if loaded is None:
+                            logger.warning(
+                                "Plugin introuvable pour auto-record",
+                                task="auto-record",
+                                username=username,
+                                source_type=source_type,
+                            )
+                            continue
 
-                        # Fallback to direct API
-                        if not hls_source:
-                            api_url = f"https://chaturbate.com/api/chatvideocontext/{username}/"
-                            headers = {
-                                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                                "Referer": "https://chaturbate.com/",
-                            }
-                            resp = requests.get(api_url, headers=headers, timeout=10)
-                            if resp.status_code == 200:
-                                data = resp.json()
-                                hls_source = data.get('hls_source')
-                                # Appliquer la contrainte de résolution sur l'URL master si possible
-                                if hls_source and max_height:
-                                    try:
-                                        from .resolvers.chaturbate import _resolve_variant
-                                        hls_source = await _resolve_variant(hls_source, max_height=max_height)
-                                    except Exception:
-                                        pass
+                        try:
+                            result = await loaded.instance.resolve(
+                                username, max_height=max_height
+                            )
+                            hls_source = result.m3u8_url
+                        except Exception as e:
+                            logger.debug(
+                                "Auto-record resolve échec",
+                                task="auto-record",
+                                username=username,
+                                error=str(e),
+                            )
 
                         if hls_source:
                             # Lancer l'enregistrement
@@ -2350,6 +2383,28 @@ async def startup_event():
     from .resolvers.chaturbate import set_chaturbate_api
     set_chaturbate_api(cb_api)
 
+    # Initialize Plugin Manager (after Chaturbate resolver wired up)
+    global plugin_manager
+    plugin_manager = PluginManager(
+        db=db,
+        plugins_root=OUTPUT_DIR / "plugins",
+        data_root=OUTPUT_DIR,
+    )
+    try:
+        await plugin_manager.ensure_bootstrap()
+        # Register builtin Chaturbate FIRST so external plugins can't steal
+        # the source_type='chaturbate' slot.
+        plugin_manager.register_builtin(chaturbate_builtin_plugin)
+        if os.getenv("PLUGINS_ENABLED", "true").lower() in {"1", "true", "yes"}:
+            await plugin_manager.load_all()
+        else:
+            logger.warning("Chargement des plugins désactivé (PLUGINS_ENABLED=false)")
+    except Exception as e:
+        logger.error("Échec initialisation plugins", error=str(e), exc_info=True)
+
+    # Wire plugins API router
+    plugins_router.init(plugin_manager, db)
+
     # Auto-login if env vars are set
     if CHATURBATE_USERNAME and CHATURBATE_PASSWORD:
         logger.info("Auto-login Chaturbate", username=CHATURBATE_USERNAME)
@@ -2360,7 +2415,7 @@ async def startup_event():
             logger.warning("Chaturbate auto-login failed", error=result.get("error"))
 
     # Démarrer les tâches de fond
-    asyncio.create_task(monitor_models_task(db, manager, FFMPEG_PATH))
+    asyncio.create_task(monitor_models_task(db, manager, FFMPEG_PATH, plugin_manager))
     asyncio.create_task(auto_record_task())
     asyncio.create_task(cleanup_old_recordings_task())
     asyncio.create_task(auto_convert_recordings_task(db, OUTPUT_DIR, manager, FFMPEG_PATH))

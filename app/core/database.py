@@ -131,6 +131,23 @@ class Database:
                 )
             """)
 
+            # Table pour les plugins installés (sources de streaming tierces)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS plugins (
+                    id TEXT PRIMARY KEY,
+                    version TEXT NOT NULL,
+                    source_type TEXT NOT NULL UNIQUE,
+                    source_repo TEXT,
+                    enabled BOOLEAN DEFAULT 1,
+                    installed BOOLEAN DEFAULT 1,
+                    status TEXT DEFAULT 'pending_restart',
+                    last_error TEXT,
+                    manifest_json TEXT,
+                    installed_at INTEGER,
+                    updated_at INTEGER
+                )
+            """)
+
             # Index pour les requêtes fréquentes
             await db.execute("""
                 CREATE INDEX IF NOT EXISTS idx_models_online
@@ -156,6 +173,7 @@ class Database:
             ("recordings", "conversion_attempts", "INTEGER DEFAULT 0"),
             ("recordings", "conversion_error", "TEXT"),
             ("recordings", "last_conversion_attempt", "INTEGER"),
+            ("models", "source_type", "TEXT DEFAULT 'chaturbate'"),
         ]
         for table, column, ddl in migrations:
             try:
@@ -743,6 +761,98 @@ class Database:
             """)
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
+
+    # ==========================================
+    # Plugins CRUD
+    # ==========================================
+
+    async def plugin_list_records(self) -> List[Dict[str, Any]]:
+        """Liste tous les enregistrements plugins (installés ou en erreur)."""
+        await self.initialize()
+        async with self._connect() as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM plugins ORDER BY id"
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def plugin_get_record(self, plugin_id: str) -> Optional[Dict[str, Any]]:
+        await self.initialize()
+        async with self._connect() as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM plugins WHERE id = ?", (plugin_id,)
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def plugin_upsert_record(
+        self,
+        plugin_id: str,
+        version: str,
+        source_type: str,
+        source_repo: Optional[str],
+        enabled: bool = True,
+        installed: bool = True,
+        status: str = "pending_restart",
+        manifest_json: Optional[str] = None,
+    ):
+        await self.initialize()
+        now = int(datetime.now().timestamp())
+        async with self._connect() as db:
+            await db.execute(
+                """
+                INSERT INTO plugins (
+                    id, version, source_type, source_repo, enabled, installed,
+                    status, manifest_json, installed_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    version = excluded.version,
+                    source_type = excluded.source_type,
+                    source_repo = excluded.source_repo,
+                    enabled = excluded.enabled,
+                    installed = excluded.installed,
+                    status = excluded.status,
+                    manifest_json = excluded.manifest_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    plugin_id, version, source_type, source_repo,
+                    int(bool(enabled)), int(bool(installed)), status,
+                    manifest_json, now, now,
+                ),
+            )
+            await db.commit()
+
+    async def plugin_set_enabled(self, plugin_id: str, enabled: bool):
+        await self.initialize()
+        now = int(datetime.now().timestamp())
+        async with self._connect() as db:
+            await db.execute(
+                "UPDATE plugins SET enabled = ?, status = ?, updated_at = ? WHERE id = ?",
+                (int(bool(enabled)), "pending_restart", now, plugin_id),
+            )
+            await db.commit()
+
+    async def plugin_set_status(
+        self, plugin_id: str, status: str, error: Optional[str] = None
+    ):
+        await self.initialize()
+        now = int(datetime.now().timestamp())
+        async with self._connect() as db:
+            await db.execute(
+                "UPDATE plugins SET status = ?, last_error = ?, updated_at = ? WHERE id = ?",
+                (status, error, now, plugin_id),
+            )
+            await db.commit()
+
+    async def plugin_delete_record(self, plugin_id: str):
+        await self.initialize()
+        async with self._connect() as db:
+            await db.execute("DELETE FROM plugins WHERE id = ?", (plugin_id,))
+            await db.commit()
 
     # ==========================================
     # JSON Migration
