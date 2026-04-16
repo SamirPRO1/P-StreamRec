@@ -113,6 +113,38 @@ docker run -d --name p-streamrec \
 | TS (original) | ~2–4 GB |
 | MP4 (converted) | ~600 MB–1.2 GB |
 
+## Plugins
+
+P-StreamRec ships with a plugin system that lets you add new streaming sources without touching the core. Each source (Chaturbate, and any third-party ones) is an independent plugin with its own manifest and Python module.
+
+### How it works
+
+- **Chaturbate is a plugin** — it's bundled with the app under `plugins/chaturbate/` and auto-installed on first launch. You can disable or uninstall it like any other plugin.
+- **Installed plugins** live in `${OUTPUT_DIR}/plugins/<id>/`. Each one is sandboxed to its own folder and data namespace.
+- **Go to Settings → Plugins** to see what's installed, enable/disable, or uninstall.
+
+### Installing extra plugins (advanced)
+
+At the bottom of the Plugins tab, click **Advanced plugin options** to reveal:
+
+- **Plugin Catalog** — browse plugins from the official repository and any custom repositories you've added. Click **Install** next to a plugin, then restart the app when prompted.
+- **Plugin Repositories** — add a third-party index URL (HTTPS only) to make its plugins appear in the catalog.
+
+> **Security warning:** non-verified plugins execute arbitrary Python code with full access to your server. Only install plugins from authors you trust. The UI explicitly asks you to acknowledge this risk for non-official plugins.
+
+### Writing your own plugin
+
+A plugin is a Python package implementing the `SourcePlugin` protocol — see [app/core/plugin_base.py](app/core/plugin_base.py) for the contract (`resolve()`, `check_status()`, `validate_target()`, manifest schema). A plugin folder contains:
+
+```
+my-plugin/
+├── manifest.json    # id, name, version, api_version, source_type, capabilities
+├── __init__.py      # must expose `plugin` (an instance of your class)
+└── plugin.py        # your implementation
+```
+
+To publish, host an `index.json` catalog (see [plugins/index.json](plugins/index.json) for the schema) pointing to a `.tar.gz` archive of your plugin, and share the index URL with users.
+
 ## Development
 
 ```bash

@@ -60,7 +60,6 @@ class PluginInfo(BaseModel):
     capabilities: List[str] = []
     homepage: Optional[str] = None
     last_error: Optional[str] = None
-    builtin: bool = False
     icon_url: Optional[str] = None
 
 
@@ -106,7 +105,6 @@ def _loaded_to_info(loaded) -> PluginInfo:
         verified=True,
         capabilities=list(loaded.manifest.capabilities),
         homepage=loaded.manifest.homepage,
-        builtin=loaded.builtin,
         icon_url=f"/api/plugins/icon/{loaded.manifest.id}",
     )
 
@@ -225,7 +223,7 @@ async def uninstall_plugin(plugin_id: str):
     # Refuser si une session FFmpeg active utilise ce source_type
     try:
         loaded = pm.registry.get_by_id(plugin_id)
-        if loaded and not loaded.builtin:
+        if loaded:
             # Import tardif pour éviter le cycle
             from .. import main as app_main  # type: ignore
             active = app_main.manager.list_status()

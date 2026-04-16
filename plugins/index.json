@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-04-16T00:00:00Z",
+  "plugins": [
+    {
+      "id": "chaturbate",
+      "name": "Chaturbate",
+      "version": "1.0.0",
+      "author": "raccommode",
+      "description": "Source Chaturbate (officielle).",
+      "api_version": 1,
+      "source_type": "chaturbate",
+      "archive_url": "https://raw.githubusercontent.com/raccommode/P-StreamRec/main/plugins/chaturbate/archive.tar.gz",
+      "archive_subpath": "chaturbate",
+      "capabilities": ["resolve", "check_status"],
+      "official": true,
+      "homepage": "https://chaturbate.com"
+    }
+  ]
+}

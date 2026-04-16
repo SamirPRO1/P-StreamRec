@@ -33,7 +33,6 @@ from .api import discover as discover_router
 from .api import following as following_router
 from .api import plugins as plugins_router
 from .core.plugins import PluginManager
-from .core.chaturbate_builtin import plugin as chaturbate_builtin_plugin
 from .core.plugin_base import PluginResolveError
 
 # Environment
@@ -2369,10 +2368,6 @@ async def startup_event():
     cb_auth = ChaturbateAuthService(db, flaresolverr)
     await cb_auth.initialize()
 
-    # Expose the authenticated session to the builtin Chaturbate plugin so the
-    # model status monitor can reuse DB-backed cookies (GH #11).
-    chaturbate_builtin_plugin.set_auth_service(cb_auth)
-
     # Initialize Chaturbate API client
     global chaturbate_api
     cb_api = ChaturbateAPI(cb_auth, flaresolverr)
@@ -2393,18 +2388,25 @@ async def startup_event():
         db=db,
         plugins_root=OUTPUT_DIR / "plugins",
         data_root=OUTPUT_DIR,
+        bundled_plugins_dir=BASE_DIR / "plugins",
     )
     try:
         await plugin_manager.ensure_bootstrap()
-        # Register builtin Chaturbate FIRST so external plugins can't steal
-        # the source_type='chaturbate' slot.
-        plugin_manager.register_builtin(chaturbate_builtin_plugin)
         if os.getenv("PLUGINS_ENABLED", "true").lower() in {"1", "true", "yes"}:
             await plugin_manager.load_all()
         else:
             logger.warning("Chargement des plugins désactivé (PLUGINS_ENABLED=false)")
     except Exception as e:
         logger.error("Échec initialisation plugins", error=str(e), exc_info=True)
+
+    # Expose the authenticated Chaturbate session to the plugin so check_status
+    # can reuse DB-backed cookies (GH #11). Plugin chargé via load_all() ci-dessus.
+    cb_loaded = plugin_manager.registry.get("chaturbate")
+    if cb_loaded is not None:
+        try:
+            cb_loaded.instance.set_auth_service(cb_auth)
+        except AttributeError:
+            pass  # plugin chaturbate custom sans set_auth_service
 
     # Wire plugins API router
     plugins_router.init(plugin_manager, db)

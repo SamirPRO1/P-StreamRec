@@ -1,19 +1,16 @@
 """
-Adapter qui expose Chaturbate comme un plugin builtin dans le registry.
+Plugin Chaturbate - source officielle pré-installée.
 
-Wrappe les fonctions existantes (resolvers.chaturbate, tasks.monitor) pour
-que `/api/start`, `/api/model/*/status` et `monitor_models_task` passent par
-le même code path que les plugins tiers.
-
-Chaturbate reste intégré au core (pas téléchargeable) mais respecte l'interface
-SourcePlugin pour valider le contrat.
+Expose la source Chaturbate via l'interface SourcePlugin standard. Les
+sources sont bundle dans le repo (plugins/chaturbate/) et copiées vers
+/data/plugins/chaturbate/ au premier démarrage par PluginManager.
 """
 from __future__ import annotations
 from typing import Optional
 
 import aiohttp
 
-from .plugin_base import (
+from app.core.plugin_base import (
     ModelStatus,
     PluginContext,
     PluginManifest,
@@ -23,20 +20,21 @@ from .plugin_base import (
 )
 
 
-class ChaturbateBuiltinPlugin:
-    """Plugin builtin pour la source Chaturbate."""
+class ChaturbatePlugin:
+    """Plugin officiel pour la source Chaturbate."""
 
     def __init__(self):
         self.manifest = PluginManifest(
             id="chaturbate",
             name="Chaturbate",
-            version="builtin",
+            version="1.0.0",
             author="raccommode",
-            description="Source Chaturbate (intégrée).",
+            description="Source Chaturbate (officielle).",
             api_version=1,
             source_type="chaturbate",
             capabilities=["resolve", "check_status"],
             official=True,
+            homepage="https://chaturbate.com",
         )
         self._ctx: Optional[PluginContext] = None
         self._auth_service = None  # ChaturbateAuthService, injecté par main
@@ -56,14 +54,12 @@ class ChaturbateBuiltinPlugin:
         if not target:
             return False
         t = target.strip().lower()
-        # Username Chaturbate: [a-z0-9_]+
         return bool(t) and all(c.isalnum() or c == "_" for c in t)
 
     async def resolve(
         self, target: str, max_height: Optional[int] = None
     ) -> ResolveResult:
-        # Import tardif pour éviter les cycles d'import au module load
-        from ..resolvers.chaturbate import resolve_m3u8_async, resolve_m3u8
+        from app.resolvers.chaturbate import resolve_m3u8_async, resolve_m3u8
 
         try:
             url = await resolve_m3u8_async(target, max_height=max_height)
@@ -83,10 +79,8 @@ class ChaturbateBuiltinPlugin:
         return ResolveResult(m3u8_url=url)
 
     async def check_status(self, username: str) -> ModelStatus:
-        from ..tasks.monitor import check_model_status
+        from app.tasks.monitor import check_model_status
 
-        # On ouvre une session dédiée pour respecter l'interface plugin
-        # (le monitor_models_task pourra continuer à mutualiser sa session).
         csrftoken = None
         try:
             if self._ctx is not None:
@@ -94,9 +88,6 @@ class ChaturbateBuiltinPlugin:
         except Exception:
             csrftoken = None
 
-        # Cookies issus de la session authentifiée (DB) si disponibles.
-        # Sans ça, l'API /api/chatvideocontext/ redirige vers le login et le
-        # check échoue systématiquement (GH #11).
         auth_cookies = None
         if self._auth_service is not None:
             try:
@@ -123,4 +114,4 @@ class ChaturbateBuiltinPlugin:
         )
 
 
-plugin = ChaturbateBuiltinPlugin()
+plugin = ChaturbatePlugin()

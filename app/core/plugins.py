@@ -40,13 +40,12 @@ from .plugin_base import (
 
 OFFICIAL_REPO_ID = "official"
 OFFICIAL_REPO_NAME = "Official"
-# Le catalogue officiel vit dans le dépôt principal P-StreamRec, sous
-# plugins-registry/. Un nom distinct de `plugins` évite toute collision avec
-# le dossier runtime des plugins installés (/data/plugins/).
+# Catalogue officiel hébergé dans le repo principal sous plugins/. Même nom
+# que le dossier runtime (/data/plugins/) : pas d'ambiguïté, les contextes
+# (source tree vs runtime) sont distincts.
 OFFICIAL_REPO_INDEX_URL = (
-    "https://raw.githubusercontent.com/raccommode/P-StreamRec/main/plugins-registry/index.json"
+    "https://raw.githubusercontent.com/raccommode/P-StreamRec/main/plugins/index.json"
 )
-BUILTIN_REPO_ID = "builtin"
 SETTINGS_KEY_REPOS = "plugin_repos"
 CATALOG_CACHE_TTL_SECONDS = 300
 
@@ -59,7 +58,6 @@ class LoadedPlugin:
     source_repo: Optional[str] = None
     status: str = "loaded"  # loaded | error | disabled
     error: Optional[str] = None
-    builtin: bool = False
 
 
 @dataclass
@@ -114,10 +112,19 @@ class PluginManager:
 
     MAX_ARCHIVE_BYTES = 50 * 1024 * 1024  # 50 MB safety cap
 
-    def __init__(self, db, plugins_root: Path, data_root: Path):
+    def __init__(
+        self,
+        db,
+        plugins_root: Path,
+        data_root: Path,
+        bundled_plugins_dir: Optional[Path] = None,
+    ):
         self.db = db
         self.plugins_root = Path(plugins_root)
         self.data_root = Path(data_root)
+        self.bundled_plugins_dir = (
+            Path(bundled_plugins_dir) if bundled_plugins_dir else None
+        )
         self.registry = SourceRegistry()
         self.loaded: Dict[str, LoadedPlugin] = {}
         self._catalog_cache: Dict[str, Tuple[float, dict]] = {}  # repo_id -> (ts, index)
@@ -131,8 +138,9 @@ class PluginManager:
         Prépare le filesystem et le sys.path pour importer les plugins.
 
         Crée /data/plugins/, ajoute /data au sys.path pour que
-        `import plugins.<id>` fonctionne, et s'assure que le repo officiel
-        est présent dans les settings.
+        `import plugins.<id>` fonctionne, copie les plugins bundle depuis
+        les sources du repo au premier démarrage, et s'assure que le repo
+        officiel est présent dans les settings.
         """
         self.plugins_root.mkdir(parents=True, exist_ok=True)
         init_file = self.plugins_root / "__init__.py"
@@ -145,15 +153,70 @@ class PluginManager:
             logger.debug("Plugin path ajouté à sys.path", path=parent)
 
         await self._ensure_official_repo()
+        await self.ensure_bundled_plugins()
+
+    async def ensure_bundled_plugins(self) -> None:
+        """
+        Copie les plugins bundle depuis bundled_plugins_dir (sources repo)
+        vers plugins_root (runtime) lors du tout premier démarrage.
+
+        Pour chaque sous-dossier <id> contenant un manifest.json dans
+        bundled_plugins_dir : si aucun record DB n'existe pour <id>, copie
+        les sources vers /data/plugins/<id> et crée un record installed=1,
+        enabled=1, source_repo=OFFICIAL_REPO_ID. Aucun accès réseau requis.
+        """
+        if self.bundled_plugins_dir is None or not self.bundled_plugins_dir.is_dir():
+            return
+
+        for entry in sorted(self.bundled_plugins_dir.iterdir()):
+            if not entry.is_dir():
+                continue
+            manifest_path = entry / "manifest.json"
+            if not manifest_path.is_file():
+                continue
+            plugin_id = entry.name
+
+            existing = await self.db.plugin_get_record(plugin_id)
+            if existing is not None:
+                continue  # Déjà connu (installé ou désinstallé par l'utilisateur)
+
+            try:
+                with open(manifest_path, encoding="utf-8") as f:
+                    manifest = manifest_from_dict(json.load(f))
+            except Exception as e:
+                logger.warning(
+                    "Manifest bundle invalide, ignoré",
+                    plugin_id=plugin_id,
+                    error=str(e),
+                )
+                continue
+
+            target = self.plugins_root / plugin_id
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(entry, target)
+
+            await self.db.plugin_upsert_record(
+                plugin_id=plugin_id,
+                version=manifest.version,
+                source_type=manifest.source_type,
+                source_repo=OFFICIAL_REPO_ID,
+                enabled=True,
+                installed=True,
+                status="pending_restart",
+                manifest_json=None,
+            )
+            logger.info(
+                "Plugin bundle auto-installé",
+                plugin_id=plugin_id,
+                version=manifest.version,
+            )
 
     async def load_all(self) -> None:
         """Charge tous les plugins installés+enabled depuis la DB."""
         records = await self.db.plugin_list_records()
         loaded_count = 0
         for rec in records:
-            if rec.get("source_repo") == BUILTIN_REPO_ID:
-                # Les builtins sont enregistrés manuellement par le core
-                continue
             if not rec.get("installed"):
                 continue
             if not rec.get("enabled"):
@@ -173,29 +236,6 @@ class PluginManager:
                 )
                 await self.db.plugin_set_status(plugin_id, "error", error=str(e))
         logger.info("Plugins chargés", count=loaded_count)
-
-    def register_builtin(self, instance: Any, source_repo: str = BUILTIN_REPO_ID) -> LoadedPlugin:
-        """Enregistre un plugin builtin (ex: Chaturbate) dans le registry."""
-        manifest = instance.manifest
-        validate_plugin_instance(instance, manifest.id)
-        ctx = self._make_context(manifest)
-        instance.init(ctx)
-        loaded = LoadedPlugin(
-            manifest=manifest,
-            instance=instance,
-            module_path="<builtin>",
-            source_repo=source_repo,
-            status="loaded",
-            builtin=True,
-        )
-        self.registry.register(loaded)
-        self.loaded[manifest.id] = loaded
-        logger.info(
-            "Plugin builtin enregistré",
-            id=manifest.id,
-            source_type=manifest.source_type,
-        )
-        return loaded
 
     def _load_one(self, plugin_id: str, source_repo: Optional[str] = None) -> LoadedPlugin:
         plugin_dir = self.plugins_root / plugin_id
@@ -532,8 +572,6 @@ class PluginManager:
         record = await self.db.plugin_get_record(plugin_id)
         if record is None:
             raise PluginError(f"Plugin '{plugin_id}' non installé")
-        if record.get("source_repo") == BUILTIN_REPO_ID:
-            raise PluginError("Les plugins builtin ne peuvent pas être désinstallés")
         target = self.plugins_root / plugin_id
         if target.exists():
             shutil.rmtree(target)
@@ -544,8 +582,6 @@ class PluginManager:
         record = await self.db.plugin_get_record(plugin_id)
         if record is None:
             raise PluginError(f"Plugin '{plugin_id}' non installé")
-        if record.get("source_repo") == BUILTIN_REPO_ID:
-            raise PluginError("Le plugin builtin ne peut pas être désactivé")
         await self.db.plugin_set_enabled(plugin_id, enabled)
 
     # ------------------------------------------------------------------

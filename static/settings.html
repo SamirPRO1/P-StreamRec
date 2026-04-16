@@ -171,48 +171,58 @@
             </div>
           </div>
 
-          <!-- Section: Catalog -->
-          <div class="settings-section" style="margin-top: 1.5rem;">
-            <div class="settings-section-header">
-              <span class="icon">&#128230;</span>
-              <h3>Plugin Catalog</h3>
-              <select id="repoFilter" onchange="loadCatalog()" style="margin-left: auto; padding: 0.4rem 0.75rem; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text-primary); font-size: 0.85rem;">
-                <option value="">All repositories</option>
-              </select>
-            </div>
-            <div class="settings-section-body">
-              <p style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.5; margin-bottom: 1rem;">
-                Browse plugins from the official and custom repositories. Non-verified plugins run arbitrary code — install only what you trust.
-              </p>
-              <div id="pluginCatalog" class="plugin-grid">
-                <p style="color: var(--text-muted); font-size: 0.9rem;">Loading catalog...</p>
-              </div>
-            </div>
+          <!-- Advanced toggle -->
+          <div style="margin-top: 2rem; text-align: center;">
+            <button type="button" id="toggleAdvancedPlugins" onclick="togglePluginAdvanced()" style="background: none; border: none; color: var(--text-muted); font-size: 0.85rem; cursor: pointer; padding: 0.4rem 0.8rem;">
+              <span id="toggleAdvancedPluginsLabel">Advanced plugin options</span> <span id="toggleAdvancedPluginsCaret">&#9662;</span>
+            </button>
           </div>
 
-          <!-- Section: Repositories -->
-          <div class="settings-section" style="margin-top: 1.5rem;">
-            <div class="settings-section-header">
-              <span class="icon">&#128214;</span>
-              <h3>Plugin Repositories</h3>
-            </div>
-            <div class="settings-section-body">
-              <div id="reposList" style="display: flex; flex-direction: column; gap: 0.5rem;">
-                <p style="color: var(--text-muted); font-size: 0.9rem;">Loading...</p>
+          <!-- Advanced area (hidden by default) -->
+          <div id="advancedPluginsArea" style="display: none;">
+            <!-- Section: Catalog -->
+            <div class="settings-section" style="margin-top: 1rem;">
+              <div class="settings-section-header">
+                <span class="icon">&#128230;</span>
+                <h3>Plugin Catalog</h3>
+                <select id="repoFilter" onchange="loadCatalog()" style="margin-left: auto; padding: 0.4rem 0.75rem; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text-primary); font-size: 0.85rem;">
+                  <option value="">All repositories</option>
+                </select>
               </div>
-              <form class="settings-form" onsubmit="addRepo(event)" style="margin-top: 1.25rem; display: flex; flex-direction: column; gap: 0.75rem;">
-                <div class="form-group">
-                  <label for="newRepoName">Repository Name</label>
-                  <input type="text" id="newRepoName" placeholder="My Custom Repo" required />
+              <div class="settings-section-body">
+                <p style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.5; margin-bottom: 1rem;">
+                  Browse plugins from the official and custom repositories. Non-verified plugins run arbitrary code &mdash; install only what you trust.
+                </p>
+                <div id="pluginCatalog" class="plugin-grid">
+                  <p style="color: var(--text-muted); font-size: 0.9rem;">Loading catalog...</p>
                 </div>
-                <div class="form-group">
-                  <label for="newRepoUrl">Index URL (index.json)</label>
-                  <input type="url" id="newRepoUrl" placeholder="https://example.com/index.json" required />
+              </div>
+            </div>
+
+            <!-- Section: Repositories -->
+            <div class="settings-section" style="margin-top: 1.5rem;">
+              <div class="settings-section-header">
+                <span class="icon">&#128214;</span>
+                <h3>Plugin Repositories</h3>
+              </div>
+              <div class="settings-section-body">
+                <div id="reposList" style="display: flex; flex-direction: column; gap: 0.5rem;">
+                  <p style="color: var(--text-muted); font-size: 0.9rem;">Loading...</p>
                 </div>
-                <div class="settings-actions">
-                  <button type="submit" class="btn-primary" style="padding: 0.6rem 1.25rem; font-size: 0.9rem;">Add Repository</button>
-                </div>
-              </form>
+                <form class="settings-form" onsubmit="addRepo(event)" style="margin-top: 1.25rem; display: flex; flex-direction: column; gap: 0.75rem;">
+                  <div class="form-group">
+                    <label for="newRepoName">Repository Name</label>
+                    <input type="text" id="newRepoName" placeholder="My Custom Repo" required />
+                  </div>
+                  <div class="form-group">
+                    <label for="newRepoUrl">Index URL (index.json)</label>
+                    <input type="url" id="newRepoUrl" placeholder="https://example.com/index.json" required />
+                  </div>
+                  <div class="settings-actions">
+                    <button type="submit" class="btn-primary" style="padding: 0.6rem 1.25rem; font-size: 0.9rem;">Add Repository</button>
+                  </div>
+                </form>
+              </div>
             </div>
           </div>
         </div>

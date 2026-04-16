@@ -19,7 +19,23 @@ document.addEventListener('DOMContentLoaded', function () {
 
 function refreshPlugins() {
   loadInstalledPlugins();
-  loadRepos().then(loadCatalog);
+  // Catalog + repos are only shown under "Advanced", load lazily on toggle.
+  var advanced = document.getElementById('advancedPluginsArea');
+  if (advanced && advanced.style.display !== 'none') {
+    loadRepos().then(loadCatalog);
+  }
+}
+
+function togglePluginAdvanced() {
+  var area = document.getElementById('advancedPluginsArea');
+  var caret = document.getElementById('toggleAdvancedPluginsCaret');
+  if (!area) return;
+  var opening = area.style.display === 'none';
+  area.style.display = opening ? 'block' : 'none';
+  if (caret) caret.innerHTML = opening ? '&#9652;' : '&#9662;';
+  if (opening) {
+    loadRepos().then(loadCatalog);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -116,9 +132,7 @@ function renderCatalog(list) {
 
 function _pluginCardHtml(p, isInstalledView) {
   var badge = '';
-  if (p.builtin) {
-    badge = '<span class="plugin-badge builtin">Built-in</span>';
-  } else if (p.verified || p.official) {
+  if (p.verified || p.official) {
     badge = '<span class="plugin-badge verified">Official</span>';
   } else {
     badge = '<span class="plugin-badge community">Community</span>';
@@ -135,7 +149,7 @@ function _pluginCardHtml(p, isInstalledView) {
   }
 
   var toggle = '';
-  if (isInstalledView && !p.builtin) {
+  if (isInstalledView) {
     var checked = (p.enabled || p.status === 'loaded') ? 'checked' : '';
     toggle = (
       '<label class="toggle-switch" title="Enable/disable">'
@@ -147,9 +161,7 @@ function _pluginCardHtml(p, isInstalledView) {
 
   var actionBtn = '';
   if (isInstalledView) {
-    if (!p.builtin) {
-      actionBtn = '<button class="btn-secondary btn-danger" onclick="uninstallPlugin(\'' + _escape(p.id) + '\')" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;">Uninstall</button>';
-    }
+    actionBtn = '<button class="btn-secondary btn-danger" onclick="uninstallPlugin(\'' + _escape(p.id) + '\')" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;">Uninstall</button>';
   } else {
     if (p._isInstalled) {
       actionBtn = '<button class="btn-secondary" disabled style="padding: 0.35rem 0.75rem; font-size: 0.8rem;">Installed</button>';
