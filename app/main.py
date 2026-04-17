@@ -657,15 +657,20 @@ async def git_update():
 async def restart_application():
     """Redémarre l'application après un délai"""
     await asyncio.sleep(2)
-    logger.info("Redémarrage application après GitOps update", task="gitops")
-    
-    # Si on utilise uvicorn avec --reload, toucher un fichier Python suffit
-    try:
-        # Toucher main.py pour déclencher le reload
-        Path(__file__).touch()
-    except:
-        # Sinon, exit et laisser le processus manager redémarrer
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+    logger.info("Redémarrage application", task="restart")
+
+    # Dev: uvicorn --reload reagit au touch du module principal.
+    if "--reload" in sys.argv:
+        try:
+            Path(__file__).touch()
+            return
+        except Exception:
+            pass
+
+    # Prod (Docker/Umbrel): on quitte proprement. Le container manager relance
+    # l'app via sa restart policy (unless-stopped). Sans ça, les plugins
+    # pending_restart ne sont jamais chargés après un /api/plugins/restart.
+    os._exit(0)
 
 
 @app.get("/model.html")
