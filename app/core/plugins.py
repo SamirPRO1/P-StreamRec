@@ -191,6 +191,10 @@ class PluginManager:
                 )
                 continue
 
+            if not manifest.auto_install:
+                # Optional plugin: user must install it manually via the catalog.
+                continue
+
             target = self.plugins_root / plugin_id
             if target.exists():
                 shutil.rmtree(target)

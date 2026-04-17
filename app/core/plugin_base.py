@@ -41,6 +41,10 @@ class PluginManifest:
     homepage: Optional[str] = None
     min_app_version: Optional[str] = None
     official: bool = False
+    # When true (default), the plugin is auto-installed on first boot from its
+    # bundled sources. Set false for optional plugins that users must opt in to
+    # via the Plugin Catalog (Settings → Plugins → Advanced).
+    auto_install: bool = True
     icon_path: Optional[Path] = None
 
 
@@ -136,4 +140,5 @@ def manifest_from_dict(data: Dict[str, Any]) -> PluginManifest:
         homepage=data.get("homepage"),
         min_app_version=data.get("min_app_version"),
         official=bool(data.get("official", False)),
+        auto_install=bool(data.get("auto_install", True)),
     )
