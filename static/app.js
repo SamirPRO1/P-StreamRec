@@ -2,6 +2,24 @@
 // Cache for instant performance
 // ============================================
 
+// Chaturbate room statuses that mean the model is broadcasting but not
+// publicly watchable. Treated as "Private" instead of "Offline".
+const PRIVATE_STATUSES = [
+  'private', 'group', 'password_protected', 'password protected',
+  'hidden', 'true_private', 'private_spy'
+];
+
+function isPrivateStatus(modelInfo) {
+  const rs = (modelInfo && (modelInfo.roomStatus || modelInfo.room_status) || '').toLowerCase();
+  return PRIVATE_STATUSES.indexOf(rs) !== -1;
+}
+
+function renderPlatformBadge(sourceType) {
+  const t = (sourceType || '').toLowerCase();
+  const label = t.charAt(0).toUpperCase() + t.slice(1);
+  return `<span class="platform-badge platform-${t || 'unknown'}" title="${label}">${label}</span>`;
+}
+
 // Store previous model statuses for change detection
 let previousModelStatuses = {};
 
@@ -273,16 +291,11 @@ async function updateModelsStatus() {
       // Update badges
       const existingBadges = card.querySelectorAll('.badge');
       existingBadges.forEach(b => b.remove());
-      
+
       if (isRecording) {
         const badge = document.createElement('div');
         badge.className = 'badge recording';
         badge.textContent = 'REC';
-        card.insertBefore(badge, card.firstChild);
-      } else if (modelInfo.isOnline) {
-        const badge = document.createElement('div');
-        badge.className = 'badge live';
-        badge.textContent = 'LIVE';
         card.insertBefore(badge, card.firstChild);
       }
       
@@ -298,9 +311,12 @@ async function updateModelsStatus() {
       // Update status text
       const statusDiv = card.querySelector('.model-status');
       if (statusDiv) {
+        const priv = !modelInfo.isOnline && isPrivateStatus(modelInfo);
+        const dotClass = isRecording ? 'recording' : modelInfo.isOnline ? 'online' : priv ? 'private' : 'offline';
+        const label = isRecording ? 'Recording' : modelInfo.isOnline ? 'Live' : priv ? 'Private' : 'Offline';
         statusDiv.innerHTML = `
-          <span class="status-dot ${isRecording ? 'recording' : modelInfo.isOnline ? 'online' : 'offline'}"></span>
-          ${isRecording ? 'Recording' : modelInfo.isOnline ? 'Live' : 'Offline'}
+          <span class="status-dot ${dotClass}"></span>
+          ${label}
           ${modelInfo.isOnline && modelInfo.viewers > 0 ? ` · ${modelInfo.viewers} viewers` : ''}
         `;
       }
@@ -388,18 +404,22 @@ async function renderModels() {
       card.className = 'model-card offline';
       card.setAttribute('data-username', modelInfo.username);
       card.onclick = () => openModelPage(modelInfo.username);
-      
-      const statusText = modelInfo.isOnline ? 'Live' : 'Offline';
-      const statusClass = modelInfo.isOnline ? 'online' : 'offline';
-      
+
+      const priv = !modelInfo.isOnline && isPrivateStatus(modelInfo);
+      const statusText = modelInfo.isOnline ? 'Live' : priv ? 'Private' : 'Offline';
+      const statusClass = modelInfo.isOnline ? 'online' : priv ? 'private' : 'offline';
+
       card.innerHTML = `
-        <img 
-          src="/api/thumbnail/${modelInfo.username}" 
-          alt="${modelInfo.username}"
-          class="model-thumbnail"
-          style="filter: ${modelInfo.isOnline ? 'none' : 'grayscale(100%) brightness(0.7)'};"
-          onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22280%22 height=%22200%22%3E%3Crect fill=%22%231a1f3a%22 width=%22280%22 height=%22200%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 fill=%22%23a0aec0%22 font-family=%22system-ui%22 font-size=%2220%22%3E${modelInfo.username}%3C/text%3E%3C/svg%3E'"
-        />
+        <div class="model-thumb-wrap">
+          <img
+            src="/api/thumbnail/${modelInfo.username}"
+            alt="${modelInfo.username}"
+            class="model-thumbnail"
+            style="filter: ${modelInfo.isOnline ? 'none' : 'grayscale(100%) brightness(0.7)'};"
+            onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22280%22 height=%22200%22%3E%3Crect fill=%22%231a1f3a%22 width=%22280%22 height=%22200%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 fill=%22%23a0aec0%22 font-family=%22system-ui%22 font-size=%2220%22%3E${modelInfo.username}%3C/text%3E%3C/svg%3E'"
+          />
+          ${renderPlatformBadge(modelInfo.sourceType || modelInfo.source_type || 'chaturbate')}
+        </div>
         <div class="model-info">
           <div class="model-name">${modelInfo.username}</div>
           <div class="model-status">
@@ -408,7 +428,7 @@ async function renderModels() {
           </div>
         </div>
       `;
-      
+
       // Add to All Models section by default
       const allGrid = document.getElementById('allGrid');
       if (allGrid) {
@@ -451,18 +471,22 @@ async function renderModels() {
       card.className = 'model-card offline';
       card.setAttribute('data-username', modelInfo.username);
       card.onclick = () => openModelPage(modelInfo.username);
-      
-      const statusText = modelInfo.isOnline ? 'Live' : 'Offline';
-      const statusClass = modelInfo.isOnline ? 'online' : 'offline';
-      
+
+      const priv = !modelInfo.isOnline && isPrivateStatus(modelInfo);
+      const statusText = modelInfo.isOnline ? 'Live' : priv ? 'Private' : 'Offline';
+      const statusClass = modelInfo.isOnline ? 'online' : priv ? 'private' : 'offline';
+
       card.innerHTML = `
-        <img 
-          src="/api/thumbnail/${modelInfo.username}" 
-          alt="${modelInfo.username}"
-          class="model-thumbnail"
-          style="filter: ${modelInfo.isOnline ? 'none' : 'grayscale(100%) brightness(0.7)'};"
-          onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22280%22 height=%22200%22%3E%3Crect fill=%22%231a1f3a%22 width=%22280%22 height=%22200%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 fill=%22%23a0aec0%22 font-family=%22system-ui%22 font-size=%2220%22%3E${modelInfo.username}%3C/text%3E%3C/svg%3E'"
-        />
+        <div class="model-thumb-wrap">
+          <img
+            src="/api/thumbnail/${modelInfo.username}"
+            alt="${modelInfo.username}"
+            class="model-thumbnail"
+            style="filter: ${modelInfo.isOnline ? 'none' : 'grayscale(100%) brightness(0.7)'};"
+            onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22280%22 height=%22200%22%3E%3Crect fill=%22%231a1f3a%22 width=%22280%22 height=%22200%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 fill=%22%23a0aec0%22 font-family=%22system-ui%22 font-size=%2220%22%3E${modelInfo.username}%3C/text%3E%3C/svg%3E'"
+          />
+          ${renderPlatformBadge(modelInfo.sourceType || modelInfo.source_type || 'chaturbate')}
+        </div>
         <div class="model-info">
           <div class="model-name">${modelInfo.username}</div>
           <div class="model-status">

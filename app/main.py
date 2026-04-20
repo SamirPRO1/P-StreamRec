@@ -821,13 +821,16 @@ async def get_model_status(username: str):
     """Récupère le statut d'un modèle depuis le cache SQLite, avec fallback sur l'API Chaturbate"""
     # Lire directement depuis le cache SQLite (mis à jour par la tâche de monitoring)
     model = await db.get_model(username)
+    source_type = (model.get('source_type') if model else None) or 'chaturbate'
 
     if model and model.get('is_online'):
         return {
             "username": username,
             "isOnline": True,
             "thumbnail": f"/api/thumbnail/{username}",
-            "viewers": model.get('viewers', 0)
+            "viewers": model.get('viewers', 0),
+            "roomStatus": model.get('room_status'),
+            "sourceType": source_type,
         }
 
     # Modèle non trouvé ou offline dans le cache: vérifier en direct via l'API Chaturbate
@@ -850,14 +853,25 @@ async def get_model_status(username: str):
                         hls_fields = ['hls_source', 'hls_source_hd', 'hls_source_high', 'hls_source_720p', 'hls_source_1080p']
                         is_online = any(data.get(f) for f in hls_fields)
                         viewers = data.get('num_viewers', 0)
+                        room_status = data.get('room_status') or None
                         if is_online:
                             return {
                                 "username": username,
                                 "isOnline": True,
                                 "thumbnail": f"/api/thumbnail/{username}",
-                                "viewers": viewers
+                                "viewers": viewers,
+                                "roomStatus": room_status,
+                                "sourceType": source_type,
                             }
-                        break  # Got a valid response, model is just offline
+                        # Pas de flux HLS mais on a peut-être un room_status « privé »
+                        return {
+                            "username": username,
+                            "isOnline": False,
+                            "thumbnail": f"/api/thumbnail/{username}",
+                            "viewers": viewers,
+                            "roomStatus": room_status,
+                            "sourceType": source_type,
+                        }
         except Exception as e:
             logger.debug("Fallback API Chaturbate échoué pour status", username=username, error=str(e), attempt=attempt + 1)
             if attempt == 0:
@@ -867,7 +881,9 @@ async def get_model_status(username: str):
         "username": username,
         "isOnline": model.get('is_online', False) if model else False,
         "thumbnail": f"/api/thumbnail/{username}",
-        "viewers": model.get('viewers', 0) if model else 0
+        "viewers": model.get('viewers', 0) if model else 0,
+        "roomStatus": model.get('room_status') if model else None,
+        "sourceType": source_type,
     }
 
 
@@ -992,7 +1008,9 @@ async def get_dashboard():
                 "recordingsCount": recordings_count,
                 "recordQuality": model.get('record_quality', 'best'),
                 "retentionDays": model.get('retention_days', 30),
-                "autoRecord": bool(model.get('auto_record', True))
+                "autoRecord": bool(model.get('auto_record', True)),
+                "roomStatus": model.get('room_status'),
+                "sourceType": model.get('source_type') or 'chaturbate',
             }
             
             models_info.append(model_info)

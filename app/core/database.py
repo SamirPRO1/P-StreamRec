@@ -174,6 +174,7 @@ class Database:
             ("recordings", "conversion_error", "TEXT"),
             ("recordings", "last_conversion_attempt", "INTEGER"),
             ("models", "source_type", "TEXT DEFAULT 'chaturbate'"),
+            ("models", "room_status", "TEXT"),
         ]
         for table, column, ddl in migrations:
             try:
@@ -224,29 +225,31 @@ class Database:
         is_online: bool,
         viewers: int = 0,
         is_recording: bool = False,
-        thumbnail_path: Optional[str] = None
+        thumbnail_path: Optional[str] = None,
+        room_status: Optional[str] = None,
     ):
         """Met à jour le statut d'un modèle"""
         await self.initialize()
-        
+
         now = int(datetime.now().timestamp())
-        
+
         async with self._connect() as db:
             update_fields = {
                 'is_online': is_online,
                 'viewers': viewers,
                 'is_recording': is_recording,
+                'room_status': room_status,
                 'last_check_at': now,
                 'updated_at': now
             }
-            
+
             if thumbnail_path:
                 update_fields['thumbnail_path'] = thumbnail_path
                 update_fields['thumbnail_updated_at'] = now
-            
+
             placeholders = ', '.join(f"{k} = ?" for k in update_fields.keys())
             values = list(update_fields.values()) + [username]
-            
+
             await db.execute(
                 f"UPDATE models SET {placeholders} WHERE username = ?",
                 values

@@ -2,6 +2,14 @@
 // Discover Page - Browse live Chaturbate models
 // ============================================
 
+// Render a small platform badge overlaid on the thumbnail.
+function renderPlatformBadge(sourceType) {
+  var t = (sourceType || '').toLowerCase();
+  var label = t.charAt(0).toUpperCase() + t.slice(1);
+  var cls = 'platform-badge platform-' + (t || 'unknown');
+  return '<span class="' + cls + '" title="' + label + '">' + label + '</span>';
+}
+
 // State
 let currentPage = 1;
 let totalPages = 1;
@@ -92,7 +100,7 @@ function renderGrid(models) {
           'onerror="this.src=\'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22280%22 height=%22200%22%3E%3Crect fill=%22%231a1f3a%22 width=%22280%22 height=%22200%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 fill=%22%23a0aec0%22 font-family=%22system-ui%22 font-size=%2216%22%3E' + escapeHtml(model.username) + '%3C/text%3E%3C/svg%3E\'" loading="lazy" />' +
         viewerText +
         ageText +
-        '<span class="live-badge">LIVE</span>' +
+        renderPlatformBadge(model.source_type || model.platform || 'chaturbate') +
       '</div>' +
       '<div class="discover-card-info">' +
         '<span class="discover-username">' + escapeHtml(model.username) + '</span>' +

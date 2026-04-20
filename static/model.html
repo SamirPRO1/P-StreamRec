@@ -649,8 +649,7 @@
           <span id="theaterIcon">🎬</span>
           <span id="theaterText">Theater Mode</span>
         </button>
-        <video id="player" class="video-player" muted autoplay controls></video>
-        <span class="live-badge">&#9679; LIVE</span>
+        <video id="player" class="video-player" muted autoplay playsinline controls></video>
         <div class="quality-selector" id="qualitySelector" style="display: none;">
           <label for="qualitySelect">Quality:</label>
           <select id="qualitySelect" onchange="changeQuality(this.value)">

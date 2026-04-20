@@ -92,16 +92,17 @@ async def check_model_status(
                 # 2. Le room_status est "public" OU
                 # 3. Le room_status est "away" (temporairement absent mais toujours en ligne)
                 is_online = (
-                    bool(hls_source) or 
+                    bool(hls_source) or
                     room_status in ["public", "away"]
                 )
-                
+
                 viewers = data.get("num_users", 0)
-                
+
                 return {
                     "is_online": is_online,
                     "viewers": viewers,
-                    "hls_source": hls_source
+                    "hls_source": hls_source,
+                    "room_status": room_status or None,
                 }
     except Exception as e:
         logger.debug("Erreur vérification statut modèle", username=username, error=str(e))
@@ -109,7 +110,8 @@ async def check_model_status(
     return {
         "is_online": False,
         "viewers": 0,
-        "hls_source": None
+        "hls_source": None,
+        "room_status": None,
     }
 
 async def generate_thumbnail_from_stream(
@@ -447,6 +449,7 @@ async def monitor_models_task(
                                     'is_online': model_status.is_online,
                                     'viewers': model_status.viewers,
                                     'hls_source': model_status.hls_source,
+                                    'room_status': getattr(model_status, 'room_status', None),
                                 }
                             except Exception as e:
                                 logger.debug(
@@ -455,7 +458,7 @@ async def monitor_models_task(
                                     username=username,
                                     error=str(e),
                                 )
-                                status = {'is_online': False, 'viewers': 0, 'hls_source': None}
+                                status = {'is_online': False, 'viewers': 0, 'hls_source': None, 'room_status': None}
                         else:
                             # Fallback direct Chaturbate (startup transitoire)
                             auth_cookies = (
@@ -516,7 +519,8 @@ async def monitor_models_task(
                             is_online=status['is_online'],
                             viewers=status['viewers'],
                             is_recording=is_recording,
-                            thumbnail_path=thumbnail_path
+                            thumbnail_path=thumbnail_path,
+                            room_status=status.get('room_status'),
                         )
                         
                         # Mettre à jour le cache des enregistrements

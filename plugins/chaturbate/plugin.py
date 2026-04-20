@@ -111,6 +111,7 @@ class ChaturbatePlugin:
             is_online=bool(data.get("is_online", False)),
             viewers=int(data.get("viewers", 0) or 0),
             hls_source=data.get("hls_source"),
+            room_status=data.get("room_status"),
         )
 
 

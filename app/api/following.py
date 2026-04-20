@@ -53,6 +53,11 @@ async def get_following():
             tracked = tracked_map.get(model["username"])
             model["isTracked"] = tracked is not None
             model["is_recording"] = bool(tracked and tracked.get("is_recording"))
+            # Surface the cached Chaturbate room_status from the tracked model so
+            # the UI can distinguish "Private" from "Offline" on the following page.
+            if tracked and tracked.get("room_status"):
+                model["room_status"] = tracked.get("room_status")
+            model["source_type"] = (tracked.get("source_type") if tracked else None) or "chaturbate"
 
         online = [m for m in followed if m.get("is_online")]
         offline = [m for m in followed if not m.get("is_online")]

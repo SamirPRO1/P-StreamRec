@@ -2,6 +2,22 @@
 // Following Page - View and manage followed models
 // ============================================
 
+// Chaturbate room statuses that mean the model is still broadcasting but
+// not publicly watchable (private/group/spy/password/hidden). Treated as
+// "Private" instead of "Offline" in the UI.
+const PRIVATE_STATUSES = [
+  'private', 'group', 'password_protected', 'password protected',
+  'hidden', 'true_private', 'private_spy'
+];
+
+// Render a small platform badge overlaid on the thumbnail.
+function renderPlatformBadge(sourceType) {
+  var t = (sourceType || '').toLowerCase();
+  var label = t.charAt(0).toUpperCase() + t.slice(1);
+  var cls = 'platform-badge platform-' + (t || 'unknown');
+  return '<span class="' + cls + '" title="' + label + '">' + label + '</span>';
+}
+
 // State
 let trackedModels = new Set();
 let isLoggedIn = false;
@@ -74,8 +90,16 @@ function renderFollowing(models) {
 
   emptyFollowing.style.display = 'none';
 
-  var online = models.filter(function(m) { return m.isOnline || m.is_online; });
-  var offline = models.filter(function(m) { return !m.isOnline && !m.is_online; });
+  var online = models.filter(function(m) {
+    if (m.isOnline || m.is_online) return true;
+    var rs = (m.room_status || m.roomStatus || '').toLowerCase();
+    return PRIVATE_STATUSES.indexOf(rs) !== -1;
+  });
+  var offline = models.filter(function(m) {
+    if (m.isOnline || m.is_online) return false;
+    var rs = (m.room_status || m.roomStatus || '').toLowerCase();
+    return PRIVATE_STATUSES.indexOf(rs) === -1;
+  });
 
   // Online section
   if (online.length > 0) {
@@ -102,16 +126,24 @@ function renderFollowingCard(model, isOnline) {
   var isTracked = trackedModels.has(username);
   var isRecording = model.isRecording || model.is_recording || false;
 
+  var roomStatus = (model.room_status || model.roomStatus || '').toLowerCase();
+  var isPrivate = !isOnline && PRIVATE_STATUSES.indexOf(roomStatus) !== -1;
+  if (isPrivate) isOnline = false;
+
   var statusBadge = '';
   if (isRecording) {
     statusBadge = '<span class="recording-badge-sm">REC</span>';
   } else if (isOnline) {
-    statusBadge = '<span class="online-badge-sm">LIVE</span>';
+    statusBadge = '<span class="online-badge-sm">Online</span>';
+  } else if (isPrivate) {
+    statusBadge = '<span class="private-badge-sm">Private</span>';
   } else {
-    statusBadge = '<span class="offline-badge-sm">OFFLINE</span>';
+    statusBadge = '<span class="offline-badge-sm">Offline</span>';
   }
 
-  var imgFilter = isOnline ? '' : 'filter: grayscale(60%) brightness(0.75);';
+  var platformBadge = renderPlatformBadge(model.source_type || model.platform || 'chaturbate');
+
+  var imgFilter = (isOnline || isPrivate) ? '' : 'filter: grayscale(60%) brightness(0.75);';
 
   // Last seen info for offline models
   var subtitleHtml = '';
@@ -125,6 +157,7 @@ function renderFollowingCard(model, isOnline) {
     '<div class="following-card-thumb" onclick="window.location.href=\'/watch/' + escapeHtml(username) + '\'">' +
       '<img src="' + escapeHtml(thumbUrl) + '" alt="' + escapeHtml(username) + '" style="' + imgFilter + '" ' +
         'onerror="this.src=\'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22280%22 height=%22180%22%3E%3Crect fill=%22%231a1f3a%22 width=%22280%22 height=%22180%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 fill=%22%23a0aec0%22 font-family=%22system-ui%22 font-size=%2216%22%3E' + escapeHtml(username) + '%3C/text%3E%3C/svg%3E\'" loading="lazy" />' +
+      platformBadge +
     '</div>' +
     '<div class="following-card-info">' +
       '<div class="following-card-header">' +

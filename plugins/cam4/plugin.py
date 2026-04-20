@@ -92,6 +92,7 @@ class CAM4Plugin:
             is_online=is_online,
             viewers=viewers,
             hls_source=hls,
+            room_status=info.get("showType") or info.get("status") or None,
         )
 
     async def _fetch_stream_info(self, username: str) -> Dict[str, Any]:

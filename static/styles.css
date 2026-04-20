@@ -2765,6 +2765,62 @@ button {
   text-transform: uppercase;
 }
 
+/* ============================================
+   PLATFORM BADGE (on stream thumbnails)
+   ============================================ */
+
+.model-thumb-wrap {
+  position: relative;
+  display: block;
+}
+
+.platform-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 5;
+  padding: 0.2rem 0.55rem;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  color: white;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  pointer-events: none;
+  user-select: none;
+  text-transform: uppercase;
+}
+
+.platform-badge.platform-chaturbate {
+  background: linear-gradient(135deg, #ff8a00 0%, #ff5e00 100%);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.platform-badge.platform-cam4 {
+  background: linear-gradient(135deg, #00b050 0%, #008f40 100%);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+/* ============================================
+   PRIVATE STATUS (online but in private session)
+   ============================================ */
+
+.private-badge-sm {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
+  background: rgba(168, 85, 247, 0.15);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
+.status-dot.private {
+  background: #a855f7;
+}
 
 /* ============================================
    RECORDINGS PAGE - Model Cards Grid

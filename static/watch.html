@@ -17,12 +17,11 @@
 
   <!-- Video Player (Theater Mode) -->
   <div class="watch-player-container">
-    <video id="videoPlayer" class="watch-video" autoplay playsinline controls></video>
-    <span class="live-badge">&#9679; LIVE</span>
+    <video id="videoPlayer" class="watch-video" autoplay muted playsinline controls></video>
     <div class="watch-offline-overlay" id="offlineOverlay" style="display: none;">
       <div class="offline-message">
-        <div class="icon">&#128308;</div>
-        <h2>Model is Offline</h2>
+        <div class="icon" id="offlineIcon">&#128308;</div>
+        <h2 id="offlineTitle">Model is Offline</h2>
         <p id="offlineText">This model is currently not streaming.</p>
         <button class="watch-btn retry-btn" id="retryBtn" onclick="retryStream()" style="margin-top: 1rem;">Retry</button>
       </div>
@@ -36,6 +35,7 @@
       <div class="watch-status" id="watchStatus">
         <span class="status-dot" id="statusDot"></span>
         <span id="statusText">Checking...</span>
+        <span id="platformBadgeContainer" style="display: none;"></span>
         <span class="watch-viewers" id="viewerCount" style="display: none;">
           &#128065; <span id="viewerNum">0</span>
         </span>

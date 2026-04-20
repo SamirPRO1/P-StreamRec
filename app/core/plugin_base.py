@@ -61,6 +61,11 @@ class ModelStatus:
     hls_source: Optional[str] = None
     thumbnail_url: Optional[str] = None
     display_name: Optional[str] = None
+    # Raw room status as reported by the source (e.g. Chaturbate room_status:
+    # "public", "away", "private", "group", "password_protected", "hidden",
+    # "true_private", "private_spy", "offline"). Used to tell "Private" apart
+    # from "Offline" in the UI.
+    room_status: Optional[str] = None
 
 
 @dataclass

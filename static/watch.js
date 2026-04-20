@@ -2,6 +2,15 @@
 // Watch Page - Live stream viewer
 // ============================================
 
+const PRIVATE_STATUSES = [
+  'private', 'group', 'password_protected', 'password protected',
+  'hidden', 'true_private', 'private_spy'
+];
+
+function isPrivateRoomStatus(rs) {
+  return PRIVATE_STATUSES.indexOf((rs || '').toLowerCase()) !== -1;
+}
+
 let currentUsername = '';
 let isFollowing = false;
 let isAutoRecord = false;
@@ -56,6 +65,12 @@ async function loadModelStatus() {
     var viewerCount = document.getElementById('viewerCount');
     var viewerNum = document.getElementById('viewerNum');
     var offlineOverlay = document.getElementById('offlineOverlay');
+    var offlineTitle = document.getElementById('offlineTitle');
+    var offlineText = document.getElementById('offlineText');
+    var offlineIcon = document.getElementById('offlineIcon');
+
+    var priv = !data.isOnline && isPrivateRoomStatus(data.roomStatus);
+    updatePlatformBadge(data.sourceType);
 
     if (data.isOnline) {
       statusDot.className = 'status-dot online';
@@ -71,7 +86,7 @@ async function loadModelStatus() {
     } else {
       // Status says offline, but try loading the stream anyway
       // The status API can return false negatives (rate limiting, cache miss)
-      if (!hlsPlayer) {
+      if (!hlsPlayer && !priv) {
         var streamLoaded = await tryLoadStream();
         if (streamLoaded) {
           statusDot.className = 'status-dot online';
@@ -83,9 +98,21 @@ async function loadModelStatus() {
         }
       }
 
-      statusDot.className = 'status-dot offline';
-      statusText.textContent = 'Offline';
-      viewerCount.style.display = 'none';
+      if (priv) {
+        statusDot.className = 'status-dot private';
+        statusText.textContent = 'Private';
+        viewerCount.style.display = 'none';
+        if (offlineIcon) offlineIcon.innerHTML = '&#128274;';
+        if (offlineTitle) offlineTitle.textContent = 'Model is in a Private Show';
+        if (offlineText) offlineText.textContent = formatPrivateText(data.roomStatus);
+      } else {
+        statusDot.className = 'status-dot offline';
+        statusText.textContent = 'Offline';
+        viewerCount.style.display = 'none';
+        if (offlineIcon) offlineIcon.innerHTML = '&#128308;';
+        if (offlineTitle) offlineTitle.textContent = 'Model is Offline';
+        if (offlineText) offlineText.textContent = 'This model is currently not streaming.';
+      }
       offlineOverlay.style.display = 'flex';
 
       // Stop stream if playing
@@ -97,6 +124,33 @@ async function loadModelStatus() {
   } catch (e) {
     console.error('Error loading model status:', e);
   }
+}
+
+function renderPlatformBadge(sourceType) {
+  var t = (sourceType || '').toLowerCase();
+  var label = t.charAt(0).toUpperCase() + t.slice(1);
+  return '<span class="platform-badge platform-' + (t || 'unknown') + '" title="' + label + '">' + label + '</span>';
+}
+
+function updatePlatformBadge(sourceType) {
+  var container = document.getElementById('platformBadgeContainer');
+  if (!container) return;
+  if (!sourceType) {
+    container.style.display = 'none';
+    container.innerHTML = '';
+    return;
+  }
+  container.style.display = 'inline-flex';
+  container.innerHTML = renderPlatformBadge(sourceType);
+}
+
+function formatPrivateText(rs) {
+  var s = (rs || '').toLowerCase();
+  if (s === 'group') return 'The model is currently in a group show.';
+  if (s === 'password_protected' || s === 'password protected') return 'The room is password-protected.';
+  if (s === 'hidden') return 'The room is hidden from public viewers.';
+  if (s === 'true_private' || s === 'private_spy') return 'The model is in a true private show.';
+  return 'The model is in a private session.';
 }
 
 // ============================================
