@@ -4,7 +4,7 @@ from typing import Optional
 from urllib.parse import urlparse
 import os
 import asyncio
-import requests
+import aiohttp
 import json
 import subprocess
 import sys
@@ -335,14 +335,11 @@ async def _resolve_m3u8(source_type: str, target: str, max_height: Optional[int]
     """Résolution directe du M3U8 pour chaturbate/cam4. Lève une exception si
     la source est inconnue ou si la résolution échoue."""
     if source_type == "chaturbate":
-        from .resolvers.chaturbate import resolve_m3u8_async, resolve_m3u8
+        from .resolvers.chaturbate import resolve_m3u8_async
         try:
-            url = await resolve_m3u8_async(target, max_height=max_height)
+            return await resolve_m3u8_async(target, max_height=max_height)
         except Exception:
-            url = None
-        if not url:
-            url = resolve_m3u8(target)
-        return url
+            return None
     if source_type == "cam4":
         return await cam4_source.resolve(target, max_height=max_height)
     raise ValueError(f"source_type inconnu: {source_type}")
@@ -1657,13 +1654,15 @@ async def check_for_update():
     docker_available = os.path.exists(DOCKER_SOCKET)
 
     try:
-        resp = requests.get(
-            "https://api.github.com/repos/raccommode/P-StreamRec/releases/latest",
-            timeout=10,
-            headers={"Accept": "application/vnd.github.v3+json"},
-        )
-        if resp.status_code == 200:
-            release = resp.json()
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                "https://api.github.com/repos/raccommode/P-StreamRec/releases/latest",
+                timeout=aiohttp.ClientTimeout(total=10),
+                headers={"Accept": "application/vnd.github.v3+json"},
+            ) as resp:
+                status_code = resp.status
+                release = await resp.json(content_type=None) if status_code == 200 else None
+        if status_code == 200 and release:
             latest_version = release.get("tag_name", "").lstrip("v")
             update_available = (
                 current_version != "dev"
@@ -1683,7 +1682,7 @@ async def check_for_update():
             "current_version": current_version,
             "latest_version": None,
             "update_available": False,
-            "error": f"GitHub API returned {resp.status_code}",
+            "error": f"GitHub API returned {status_code}",
             "docker_available": docker_available,
         }
     except Exception as e:
@@ -2182,7 +2181,7 @@ async def auto_record_task():
     """Vérifie automatiquement les modèles et lance les enregistrements (utilise SQLite)"""
     while True:
         try:
-            await asyncio.sleep(120)  # Vérifier toutes les 2 minutes
+            await asyncio.sleep(180)  # Vérifier toutes les 3 minutes
             
             # Charger les modèles depuis SQLite avec auto_record activé
             models = await db.get_models_for_auto_record()

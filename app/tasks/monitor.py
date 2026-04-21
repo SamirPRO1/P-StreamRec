@@ -18,8 +18,8 @@ from ..logger import logger
 from ..core.config import OUTPUT_DIR
 
 # Intervalle de vérification (en secondes)
-MONITOR_INTERVAL = 30  # Vérifie toutes les 30 secondes
-THUMBNAIL_UPDATE_INTERVAL = 60  # Miniature mise à jour toutes les 60 secondes
+MONITOR_INTERVAL = 60  # Vérifie toutes les 60 secondes
+THUMBNAIL_UPDATE_INTERVAL = 300  # Miniature mise à jour toutes les 5 minutes
 
 async def check_model_status(
     session: aiohttp.ClientSession,
@@ -472,25 +472,26 @@ async def monitor_models_task(
                         )
                         
                         if needs_thumbnail_update:
-                            if is_recording and active_session:
-                                # Miniature depuis le stream en cours
+                            # 1) HTTP download from provider (zero CPU). Only for Chaturbate;
+                            #    CAM4 has its own flow via download in followed/model APIs.
+                            if status['is_online'] and source_type == 'chaturbate':
+                                thumbnail_path = await download_thumbnail_from_chaturbate(
+                                    session,
+                                    username,
+                                    OUTPUT_DIR
+                                )
+
+                            # 2) Fallback: ffmpeg extract 1 frame from our local HLS playlist
+                            if not thumbnail_path and is_recording and active_session:
                                 thumbnail_path = await generate_thumbnail_from_stream(
                                     username,
                                     active_session['id'],
                                     OUTPUT_DIR,
                                     ffmpeg_path
                                 )
-                            
-                            if not thumbnail_path and status['is_online']:
-                                # Miniature depuis Chaturbate
-                                thumbnail_path = await download_thumbnail_from_chaturbate(
-                                    session,
-                                    username,
-                                    OUTPUT_DIR
-                                )
-                            
+
+                            # 3) Offline fallback: extract from latest recording
                             if not thumbnail_path:
-                                # Miniature depuis la dernière rediffusion
                                 thumbnail_path = await generate_thumbnail_from_recording(
                                     username,
                                     OUTPUT_DIR,

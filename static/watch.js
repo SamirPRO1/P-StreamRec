@@ -62,7 +62,7 @@ async function initWatch() {
   ]);
 
   // Start periodic status check
-  statusCheckInterval = setInterval(loadModelStatus, 15000);
+  statusCheckInterval = setInterval(loadModelStatus, 30000);
 }
 
 // ============================================

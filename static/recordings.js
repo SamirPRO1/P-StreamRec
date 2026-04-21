@@ -281,12 +281,12 @@ async function playRecording(username, filename, recordingId) {
     }
   };
 
-  // Save position periodically
+  // Save position periodically (15s is plenty; was 5s)
   var saveInterval = setInterval(function() {
     if (video.currentTime > 0 && !video.paused && recordingId) {
       savePosition(recordingId, username, video.currentTime, video.duration);
     }
-  }, 5000);
+  }, 15000);
 
   // Save on pause
   video.onpause = function() {

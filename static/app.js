@@ -714,11 +714,11 @@ window.addEventListener('DOMContentLoaded', () => {
   // Display models
   renderModels();
   
-  // Update statuses every 15 seconds (fast and dynamic)
-  setInterval(updateModelsStatus, 15000);
-  
-  // Check and start recordings every 60 seconds
-  setInterval(checkAndStartRecordings, 60000);
+  // Update statuses every 30 seconds (backend monitor polls every 60s anyway)
+  setInterval(updateModelsStatus, 30000);
+
+  // Check and start recordings every 3 minutes (backend auto-record covers this)
+  setInterval(checkAndStartRecordings, 180000);
   checkAndStartRecordings(); // First immediate check
   
   // Close modal when clicking outside

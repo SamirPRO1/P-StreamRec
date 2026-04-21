@@ -59,27 +59,34 @@ class FFmpegSession:
                    record_path=self.record_path,
                    start_date=self.start_date)
         
-        f = open(self.record_path, "ab", buffering=0)
+        # 1 MiB chunks + 1 MiB write buffer: drastically fewer read/write syscalls
+        # vs. the previous 64 KiB/unbuffered loop. CPU overhead of the writer
+        # thread goes from "wakes ~100 times/sec on a busy stream" to a handful.
+        CHUNK_SIZE = 1024 * 1024
+        f = open(self.record_path, "ab", buffering=CHUNK_SIZE)
         total_bytes = 0
         chunk_count = 0
-        
+        last_log_threshold = 0
+
         try:
             while not self._stop_evt.is_set():
-                chunk = self.process.stdout.read(64 * 1024)
+                chunk = self.process.stdout.read(CHUNK_SIZE)
                 if not chunk:
-                    logger.info("Writer loop: fin du flux", 
+                    logger.info("Writer loop: fin du flux",
                                session_id=self.id,
                                total_bytes=total_bytes,
                                chunk_count=chunk_count)
                     break
-                    
+
                 f.write(chunk)
                 total_bytes += len(chunk)
                 chunk_count += 1
-                
-                # Log tous les 100MB
-                if total_bytes % (100 * 1024 * 1024) < 64 * 1024:
-                    logger.debug("Progression écriture", 
+
+                # Log tous les 100MB (compteur monotone, évite les faux positifs du modulo)
+                threshold_100mb = total_bytes // (100 * 1024 * 1024)
+                if threshold_100mb > last_log_threshold:
+                    last_log_threshold = threshold_100mb
+                    logger.debug("Progression écriture",
                                session_id=self.id,
                                bytes_written=total_bytes,
                                mb_written=f"{total_bytes / 1024 / 1024:.1f}")

@@ -965,13 +965,13 @@ window.addEventListener('DOMContentLoaded', function() {
     });
   }
 
-  // Auto-refresh stats every 10 seconds when on stats tab
+  // Auto-refresh stats every 30 seconds when on stats tab
   setInterval(function() {
     var statsTab = document.getElementById('tab-statistics');
     if (statsTab && statsTab.classList.contains('active')) {
       loadSystemStats();
     }
-  }, 10000);
+  }, 30000);
 });
 
 // ============================================

@@ -50,8 +50,88 @@ async def resolve_m3u8_async(username: str, max_height: Optional[int] = None) ->
         except Exception as e:
             logger.debug("Auth resolution failed, falling back", error=str(e))
 
-    # Method 2 & 3: Fallback to sync resolver
-    return resolve_m3u8(username)
+    # Method 2 & 3: Fallback to async resolver (non-blocking for event loop)
+    return await _resolve_m3u8_async_fallback(username, max_height=max_height)
+
+
+async def _resolve_m3u8_async_fallback(username: str, max_height: Optional[int] = None) -> str:
+    """Async fallback: try the chatvideocontext API, then scrape the HTML page.
+    Uses aiohttp so the FastAPI event loop isn't blocked during resolution."""
+    username = username.strip().lower()
+    if not username or not re.match(r'^[a-z0-9_]+$', username):
+        raise ResolveError("Nom d'utilisateur invalide")
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json",
+        "Referer": "https://chaturbate.com/",
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            # 1) API chatvideocontext
+            api_url = f"https://chaturbate.com/api/chatvideocontext/{username}/"
+            try:
+                async with session.get(
+                    api_url,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                    ssl=False,
+                ) as api_resp:
+                    if api_resp.status == 200:
+                        api_data = await api_resp.json(content_type=None)
+                        quality_checks = [
+                            'hls_source_hd', 'hls_source_high',
+                            'hls_source_720p', 'hls_source_1080p', 'hls_source',
+                        ]
+                        best_m3u8 = None
+                        for field_name in quality_checks:
+                            if api_data.get(field_name):
+                                best_m3u8 = api_data[field_name]
+                                break
+                        if best_m3u8:
+                            return await _resolve_variant(best_m3u8, max_height=max_height)
+            except Exception as e:
+                logger.debug("Async API resolve failed, falling back to HTML", username=username, error=str(e))
+
+            # 2) Fallback: parse HTML page
+            html_headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            }
+            async with session.get(
+                f"https://chaturbate.com/{username}/",
+                headers=html_headers,
+                timeout=aiohttp.ClientTimeout(total=10),
+                ssl=False,
+            ) as resp:
+                if resp.status != 200:
+                    raise ResolveError(f"Impossible d'accéder à la page (HTTP {resp.status})")
+                html_content = await resp.text()
+
+        m3u8_patterns = [
+            r'"(https?://[^"]*\.m3u8[^"]*)"',
+            r"'(https?://[^']*\.m3u8[^']*)'",
+            r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)',
+        ]
+        for pattern in m3u8_patterns:
+            matches = re.findall(pattern, html_content, re.IGNORECASE)
+            if matches:
+                m3u8_url = matches[0] if not isinstance(matches[0], tuple) else matches[0][-1]
+                m3u8_url = m3u8_url.replace("\\/", "/").replace("\\", "")
+                m3u8_url = html.unescape(m3u8_url)
+                m3u8_url = re.sub(r'u([0-9a-fA-F]{4})', lambda m: chr(int(m.group(1), 16)), m3u8_url)
+                m3u8_url = m3u8_url.rstrip('",;: \t\n\r')
+                if m3u8_url.startswith("http") and ".m3u8" in m3u8_url:
+                    return await _resolve_variant(m3u8_url, max_height=max_height)
+
+        if "offline" in html_content.lower():
+            raise ResolveError(f"{username} est hors ligne")
+        raise ResolveError(f"Impossible de trouver le flux M3U8 pour {username}")
+    except ResolveError:
+        raise
+    except Exception as e:
+        raise ResolveError(f"Erreur réseau: {str(e)}")
 
 
 def _parse_master_playlist(text: str):

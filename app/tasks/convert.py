@@ -32,26 +32,23 @@ async def convert_ts_to_mp4(
     if mp4_path is None:
         mp4_path = ts_path.with_suffix('.mp4')
     
-    logger.info("Conversion TS->MP4 démarrée", 
-               ts_file=ts_path.name, 
+    logger.info("Remux TS->MP4 démarré",
+               ts_file=ts_path.name,
                mp4_file=mp4_path.name)
-    
-    # Commande FFmpeg optimisée pour compression
-    # -c:v libx264 : codec H.264 (meilleure compression)
-    # -crf 23 : qualité (18-28, 23 = bon équilibre qualité/taille)
-    # -preset medium : vitesse de compression (fast, medium, slow)
-    # -c:a aac : codec audio AAC
-    # -b:a 128k : bitrate audio
+
+    # Remux only: the HLS source is already H.264+AAC, so copying codecs
+    # produces a valid MP4 almost instantly with near-zero CPU usage.
+    # -bsf:a aac_adtstoasc : reformat ADTS AAC (TS) into MP4-friendly ASC
     cmd = [
         ffmpeg_path,
+        "-nostdin", "-hide_banner", "-loglevel", "error",
+        "-fflags", "+genpts+igndts",
         "-i", str(ts_path),
-        "-c:v", "libx264",
-        "-crf", "23",
-        "-preset", "medium",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-movflags", "+faststart",  # Optimisation streaming
-        "-y",  # Overwrite
+        "-map", "0",
+        "-c", "copy",
+        "-bsf:a", "aac_adtstoasc",
+        "-movflags", "+faststart",
+        "-y",
         str(mp4_path)
     ]
     
@@ -154,7 +151,8 @@ async def auto_convert_recordings_task(db, output_dir: Path, ffmpeg_manager, ffm
 
     while True:
         try:
-            await asyncio.sleep(30)  # Vérifier toutes les 30 secondes
+            # Scan every 2 minutes (remux is cheap but glob/stat over large dirs is not free)
+            await asyncio.sleep(120)
 
             # Read settings from DB each iteration (runtime changeable)
             auto_convert, keep_ts = await _get_recording_settings(db)
@@ -183,6 +181,10 @@ async def auto_convert_recordings_task(db, output_dir: Path, ffmpeg_manager, ffm
 
                 username = user_dir.name
 
+                # Charger les recordings UNE seule fois par user (évite N+1 DB calls)
+                user_recordings = await db.get_recordings(username)
+                recordings_by_filename = {r['filename']: r for r in user_recordings}
+
                 # Scanner TOUS les fichiers .ts dans le dossier de l'utilisateur
                 for ts_file in user_dir.glob("*.ts"):
                     ts_path = Path(ts_file)
@@ -201,9 +203,7 @@ async def auto_convert_recordings_task(db, output_dir: Path, ffmpeg_manager, ffm
                                    username=username,
                                    file=ts_file.name)
 
-                        # Vérifier si dans la DB et mettre à jour si nécessaire
-                        recordings = await db.get_recordings(username)
-                        existing = next((r for r in recordings if r['filename'] == ts_file.name), None)
+                        existing = recordings_by_filename.get(ts_file.name)
 
                         if existing and not existing.get('is_converted'):
                             # Mettre à jour la DB
@@ -237,9 +237,9 @@ async def auto_convert_recordings_task(db, output_dir: Path, ffmpeg_manager, ffm
                                            error=str(e))
                         continue
 
-                    # Vérifier si le fichier TS est stable (pas modifié depuis 60s)
+                    # Vérifier si le fichier TS est stable (pas modifié depuis 180s)
                     last_modified = ts_path.stat().st_mtime
-                    if time.time() - last_modified < 60:
+                    if time.time() - last_modified < 180:
                         # Fichier encore en cours d'écriture
                         logger.debug("Fichier modifié récemment, attente stabilité",
                                    file=ts_path.name,
@@ -248,8 +248,7 @@ async def auto_convert_recordings_task(db, output_dir: Path, ffmpeg_manager, ffm
 
                     # If auto_convert is disabled, just index the TS file in DB
                     if not auto_convert:
-                        recordings = await db.get_recordings(username)
-                        existing = next((r for r in recordings if r['filename'] == ts_file.name), None)
+                        existing = recordings_by_filename.get(ts_file.name)
                         if not existing:
                             recording_id = f"{username}_{ts_file.stem}"
                             # Calculate duration from TS file
@@ -270,8 +269,7 @@ async def auto_convert_recordings_task(db, output_dir: Path, ffmpeg_manager, ffm
                         continue
 
                     # Skip si trop de tentatives ratées pour ce fichier
-                    recordings = await db.get_recordings(username)
-                    existing = next((r for r in recordings if r['filename'] == ts_file.name), None)
+                    existing = recordings_by_filename.get(ts_file.name)
                     attempts = (existing or {}).get('conversion_attempts') or 0
                     if attempts >= MAX_CONVERSION_ATTEMPTS:
                         logger.debug("Conversion skippée (trop d'échecs)",
@@ -295,10 +293,7 @@ async def auto_convert_recordings_task(db, output_dir: Path, ffmpeg_manager, ffm
                     )
 
                     if success and mp4_path_result:
-                        # Mettre à jour ou créer l'enregistrement dans la DB
-                        recordings = await db.get_recordings(username)
-                        existing = next((r for r in recordings if r['filename'] == ts_file.name), None)
-
+                        # existing vient déjà du cache recordings_by_filename
                         recording_id = existing.get('recording_id') if existing else f"{username}_{ts_file.stem}"
 
                         # Reset compteur d'échec car la conversion a réussi
@@ -378,8 +373,8 @@ async def auto_convert_recordings_task(db, output_dir: Path, ffmpeg_manager, ffm
                                    attempt=attempts + 1,
                                    max_attempts=MAX_CONVERSION_ATTEMPTS)
 
-                    # Attendre un peu entre chaque conversion pour éviter surcharge
-                    await asyncio.sleep(5)
+                    # Petit yield entre conversions; le remux est quasi-instantané
+                    await asyncio.sleep(1)
 
         except Exception as e:
             logger.error("Erreur dans tâche de conversion",
