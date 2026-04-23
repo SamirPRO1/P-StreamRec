@@ -95,7 +95,7 @@ function renderGrid(models) {
     }
 
     var cardSource = (model.source_type || model.platform || 'chaturbate');
-    return '<div class="discover-card" onclick="openWatch(\'' + escapeHtml(model.username) + '\', \'' + escapeHtml(cardSource) + '\')">' +
+    return '<div class="discover-card" data-username="' + escapeHtml(model.username) + '" onclick="openWatch(\'' + escapeHtml(model.username) + '\', \'' + escapeHtml(cardSource) + '\')">' +
       '<div class="discover-card-thumb">' +
         '<img src="' + escapeHtml(thumbUrl) + '" alt="' + escapeHtml(model.username) + '" ' +
           'onerror="this.src=\'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22280%22 height=%22200%22%3E%3Crect fill=%22%231a1f3a%22 width=%22280%22 height=%22200%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 fill=%22%23a0aec0%22 font-family=%22system-ui%22 font-size=%2216%22%3E' + escapeHtml(model.username) + '%3C/text%3E%3C/svg%3E\'" loading="lazy" />' +
@@ -260,6 +260,41 @@ function showNotification(message, type) {
 }
 
 // ============================================
+// Auto-refresh live thumbnails
+// ============================================
+// Re-fetch l'API et update uniquement les src des miniatures. L'API renvoie
+// à chaque appel une URL avec signature/timestamp frais (Chaturbate:
+// ?1776964320, CAM4: ?s=...), donc le browser re-télécharge sans avoir à
+// cache-buster manuellement.
+async function refreshLiveThumbnails() {
+  if (document.hidden) return; // suspend en background tab
+  var grid = document.getElementById('discoverGrid');
+  if (!grid || !grid.querySelector('.discover-card')) return;
+
+  var params = new URLSearchParams({ page: currentPage, limit: 24 });
+  if (currentGender) params.set('gender', currentGender);
+  if (currentSearch) params.set('search', currentSearch);
+  if (currentSort) params.set('sort', currentSort);
+  if (activeTags.length > 0) params.set('tags', activeTags.join(','));
+
+  try {
+    var res = await fetch('/api/discover?' + params.toString());
+    if (!res.ok) return;
+    var data = await res.json();
+    (data.models || []).forEach(function(model) {
+      var card = grid.querySelector('.discover-card[data-username="' + CSS.escape(model.username) + '"]');
+      if (!card) return;
+      var img = card.querySelector('img');
+      if (!img) return;
+      var newThumb = model.thumbnail || ('https://roomimg.stream.highwebmedia.com/ri/' + model.username + '.jpg');
+      if (img.src !== newThumb) img.src = newThumb;
+    });
+  } catch (e) {
+    // Silencieux: on réessaiera au prochain tick
+  }
+}
+
+// ============================================
 // Initialization
 // ============================================
 window.addEventListener('DOMContentLoaded', function() {
@@ -292,4 +327,7 @@ window.addEventListener('DOMContentLoaded', function() {
 
   // Load data
   fetchDiscover();
+
+  // Refresh live thumbnails toutes les 30s
+  setInterval(refreshLiveThumbnails, 30000);
 });

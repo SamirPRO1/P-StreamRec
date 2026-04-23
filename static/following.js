@@ -153,7 +153,7 @@ function renderFollowingCard(model, isOnline) {
     subtitleHtml = '<span style="font-size: 0.8rem; color: var(--text-muted);">' + formatLastSeen(model.last_seen_online_at) + '</span>';
   }
 
-  return '<div class="following-card ' + (isOnline ? 'is-online' : 'is-offline') + '">' +
+  return '<div class="following-card ' + (isOnline ? 'is-online' : 'is-offline') + '" data-username="' + escapeHtml(username) + '">' +
     '<div class="following-card-thumb" onclick="window.location.href=\'/watch/' + escapeHtml(username) + '\'">' +
       '<img src="' + escapeHtml(thumbUrl) + '" alt="' + escapeHtml(username) + '" style="' + imgFilter + '" ' +
         'onerror="this.src=\'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22280%22 height=%22180%22%3E%3Crect fill=%22%231a1f3a%22 width=%22280%22 height=%22180%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 fill=%22%23a0aec0%22 font-family=%22system-ui%22 font-size=%2216%22%3E' + escapeHtml(username) + '%3C/text%3E%3C/svg%3E\'" loading="lazy" />' +
@@ -299,9 +299,50 @@ function showNotification(message, type) {
 }
 
 // ============================================
+// Auto-refresh live thumbnails
+// ============================================
+// /api/following lit depuis la DB SQLite, qui n'est rafraîchie que tous les
+// 5min par sync_following_task. On ne peut donc pas s'appuyer sur l'API
+// pour avoir des URLs fresh. Stratégie:
+//   - Chaturbate (mmcdn / highwebmedia): cache-bust local via ?_cb=now,
+//     le CDN ignore les query params non-signés et re-sert la version
+//     courante au CDN.
+//   - CAM4 (xcdnpro.com): l'URL contient une signature ?s=... qu'il ne
+//     faut pas altérer. On skip — la miniature sera rafraîchie au prochain
+//     sync CAM4.
+function _bustChaturbateUrl(src) {
+  if (!src) return src;
+  var isChaturbate = src.indexOf('mmcdn.com') !== -1 ||
+                     src.indexOf('highwebmedia.com') !== -1;
+  if (!isChaturbate) return src;
+  var base = src.split('#')[0];
+  base = base.replace(/([?&])_cb=\d+(&|$)/, '$1').replace(/[?&]$/, '');
+  var sep = base.indexOf('?') === -1 ? '?' : '&';
+  return base + sep + '_cb=' + Date.now();
+}
+
+async function refreshLiveThumbnails() {
+  if (document.hidden) return;
+  var onlineGrid = document.getElementById('onlineGrid');
+  if (!onlineGrid) return;
+  var cards = onlineGrid.querySelectorAll('.following-card');
+  if (!cards.length) return;
+
+  cards.forEach(function(card) {
+    var img = card.querySelector('img');
+    if (!img || !img.src) return;
+    var fresh = _bustChaturbateUrl(img.src);
+    if (fresh !== img.src) img.src = fresh;
+  });
+}
+
+// ============================================
 // Initialization
 // ============================================
 window.addEventListener('DOMContentLoaded', function() {
+  // Refresh live thumbnails toutes les 30s
+  setInterval(refreshLiveThumbnails, 30000);
+
   // Add animation keyframes
   var style = document.createElement('style');
   style.textContent = '@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } } @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }';

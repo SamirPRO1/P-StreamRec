@@ -54,9 +54,11 @@ async function initWatch() {
   document.title = currentUsername + ' - P-StreamRec';
   document.getElementById('watchUsername').textContent = currentUsername;
 
-  // Load everything in parallel
+  // loadModelStatus doit s'exécuter en premier: il résout currentSourceType,
+  // dont dépendent loadFollowStatus et loadTrackStatus pour router vers le
+  // bon backend (CAM4 vs Chaturbate).
+  await loadModelStatus();
   await Promise.all([
-    loadModelStatus(),
     loadFollowStatus(),
     loadTrackStatus(),
   ]);
@@ -84,6 +86,7 @@ async function loadModelStatus() {
     var offlineIcon = document.getElementById('offlineIcon');
 
     var priv = !data.isOnline && isPrivateRoomStatus(data.roomStatus);
+    if (data.sourceType) currentSourceType = data.sourceType;
     updatePlatformBadge(data.sourceType);
 
     if (data.isOnline) {

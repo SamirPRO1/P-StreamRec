@@ -557,6 +557,20 @@ class Database:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
+    async def get_followed_model(self, username: str) -> Optional[Dict[str, Any]]:
+        """Récupère un followed_model par username (sans filtre source_type).
+        Utilisé pour résoudre la plateforme d'un modèle qui n'est pas dans
+        `tracked_models` mais dans la liste des favoris."""
+        await self.initialize()
+        async with self._connect() as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM followed_models WHERE username = ? LIMIT 1",
+                (username,),
+            )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
     async def clear_followed(self):
         """Clear all followed models"""
         await self.initialize()

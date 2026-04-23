@@ -19,7 +19,8 @@ from ..core.config import OUTPUT_DIR
 
 # Intervalle de vérification (en secondes)
 MONITOR_INTERVAL = 60  # Vérifie toutes les 60 secondes
-THUMBNAIL_UPDATE_INTERVAL = 300  # Miniature mise à jour toutes les 5 minutes
+THUMBNAIL_UPDATE_INTERVAL = 300  # Miniature offline: toutes les 5 minutes
+THUMBNAIL_UPDATE_INTERVAL_LIVE = 60  # Miniature live: toutes les 60s pour refléter l'activité
 
 async def check_model_status(
     session: aiohttp.ClientSession,
@@ -323,11 +324,34 @@ async def update_recordings_cache(db: 'Database', username: str, output_dir: Pat
     """Met à jour le cache des enregistrements dans SQLite"""
     try:
         import time
-        records_dir = output_dir / "records" / username
-        
+        records_root = output_dir / "records"
+        records_dir = records_root / username
+
+        # Purge des rows DB orphelines : un fichier TS et MP4 qui n'existent
+        # plus sur disque doivent être retirés de la DB, sinon le recording
+        # reste affiché sur /recordings sans moyen de le supprimer depuis
+        # l'UI (ex: suppression manuelle du fichier, volume réinitialisé).
+        # Safety: on ne purge QUE si le dossier parent /records existe (sinon
+        # volume démonté, on ne veut rien effacer).
+        if records_root.exists():
+            existing_recs = await db.get_recordings(username)
+            for rec in existing_recs:
+                ts_path_str = rec.get('file_path')
+                mp4_path_str = rec.get('mp4_path')
+                ts_exists = bool(ts_path_str) and Path(ts_path_str).exists()
+                mp4_exists = bool(mp4_path_str) and Path(mp4_path_str).exists()
+                if not ts_exists and not mp4_exists:
+                    await db.delete_recording(username, rec['filename'])
+                    logger.info(
+                        "Row recording orpheline supprimée",
+                        username=username,
+                        filename=rec['filename'],
+                        task="monitor",
+                    )
+
         if not records_dir.exists():
             return
-        
+
         for ts_file in records_dir.glob("*.ts"):
             stat = ts_file.stat()
             
@@ -464,11 +488,17 @@ async def monitor_models_task(
                         )
                         is_recording = active_session is not None
                         
-                        # Générer/mettre à jour la miniature
+                        # Générer/mettre à jour la miniature. Les modèles live
+                        # sont rafraîchis plus souvent (60s) pour refléter
+                        # l'activité sur les pages Discover / Following.
                         thumbnail_path = None
                         last_thumbnail_update = model.get('thumbnail_updated_at') or 0
+                        thumb_interval = (
+                            THUMBNAIL_UPDATE_INTERVAL_LIVE if status['is_online']
+                            else THUMBNAIL_UPDATE_INTERVAL
+                        )
                         needs_thumbnail_update = (
-                            datetime.now().timestamp() - last_thumbnail_update > THUMBNAIL_UPDATE_INTERVAL
+                            datetime.now().timestamp() - last_thumbnail_update > thumb_interval
                         )
                         
                         if needs_thumbnail_update:

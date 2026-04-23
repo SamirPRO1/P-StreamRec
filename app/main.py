@@ -200,7 +200,18 @@ app.include_router(cam4_router.router)
 app.include_router(discover_router.router)
 app.include_router(following_router.router)
 
-# Static mounts
+# Static mounts — desactiver le cache pour que les reload JS/CSS soient pris
+# en compte immédiatement en dev (volume mount). Le surcoût bandwidth est
+# negligeable pour des fichiers locaux.
+@app.middleware("http")
+async def _no_cache_static(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # Route protégée pour les enregistrements
@@ -829,6 +840,16 @@ async def get_model_status(username: str, source: Optional[str] = None):
     le plugin de la source (query param `source=cam4`) ou sur l'API Chaturbate."""
     # Lire directement depuis le cache SQLite (mis à jour par la tâche de monitoring)
     model = await db.get_model(username)
+    # Si pas dans tracked_models, fallback sur followed_models pour retrouver
+    # le source_type réel (sinon on renvoie chaturbate par défaut, ce qui
+    # casse le bouton Follow sur la page watch pour les modèles CAM4 suivis).
+    if not model or not model.get('source_type'):
+        followed = await db.get_followed_model(username)
+        if followed and followed.get('source_type'):
+            if not model:
+                model = followed
+            else:
+                model = {**model, 'source_type': followed['source_type']}
     # Priorité: param `source` explicite (depuis le discover) > DB > défaut.
     source_type = (source or (model.get('source_type') if model else None) or 'chaturbate').lower()
 
@@ -1420,38 +1441,46 @@ async def delete_recording(username: str, filename: str):
     ts_path = records_dir / f"{file_stem}.ts"
     mp4_path = records_dir / f"{file_stem}.mp4"
     thumb_path = OUTPUT_DIR / "thumbnails" / username / f"{file_stem}.jpg"
-    
-    # Vérifier qu'au moins un fichier existe
-    if not ts_path.exists() and not mp4_path.exists():
+
+    # Si les fichiers ont déjà disparu (cleanup externe, volume remonté, etc.)
+    # on doit quand même pouvoir nettoyer la row DB orpheline — sinon elle
+    # reste affichée dans /recordings sans jamais pouvoir être retirée.
+    existing_recs = await db.get_recordings(username)
+    has_db_row = any(Path(r['filename']).stem == file_stem for r in existing_recs)
+
+    if not ts_path.exists() and not mp4_path.exists() and not has_db_row:
         raise HTTPException(status_code=404, detail="Enregistrement introuvable")
-    
+
     # Supprimer tous les fichiers associés
     try:
         files_deleted = []
-        
+
         # Supprimer TS
         if ts_path.exists():
             ts_path.unlink()
             files_deleted.append("TS")
             logger.info("Fichier TS supprimé", username=username, file=ts_path.name)
-        
+
         # Supprimer MP4
         if mp4_path.exists():
             mp4_path.unlink()
             files_deleted.append("MP4")
             logger.info("Fichier MP4 supprimé", username=username, file=mp4_path.name)
-        
+
         # Supprimer miniature
         if thumb_path.exists():
             thumb_path.unlink()
             files_deleted.append("Miniature")
-        
+
         # Supprimer de la base de données
         await db.delete_recording(username, f"{file_stem}.ts")
         logger.info("Enregistrement supprimé de la DB", username=username, filename=filename)
-        
+
+        if not files_deleted and has_db_row:
+            files_deleted.append("DB (row orpheline)")
+
         return {
-            "success": True, 
+            "success": True,
             "message": f"Supprimé: {', '.join(files_deleted)}",
             "deleted_files": files_deleted
         }
