@@ -6,6 +6,11 @@ import time
 from datetime import datetime
 from typing import Dict, List, Optional
 from .logger import logger
+from .core.http_client import (
+    ffmpeg_http_proxy_url,
+    get_outbound_proxy_url,
+    is_socks_proxy,
+)
 
 
 class FFmpegSession:
@@ -175,15 +180,38 @@ class FFmpegManager:
                 "-reconnect", "1",
                 "-reconnect_streamed", "1",
                 "-reconnect_delay_max", "10",
+            ]
+
+            proxy_url = ffmpeg_http_proxy_url()
+            if proxy_url:
+                cmd.extend(["-http_proxy", proxy_url])
+            elif is_socks_proxy(get_outbound_proxy_url()):
+                logger.warning(
+                    "Proxy SOCKS configuré: les requêtes Python l'utilisent, "
+                    "mais FFmpeg ne supporte ici que les proxys HTTP(S)"
+                )
+
+            cmd.extend([
                 "-i", sess.input_url,
                 "-map", "0",
                 "-c", "copy",
                 "-f", "tee", tee_spec,
-            ]
+            ])
+
+            safe_cmd = []
+            redact_next = False
+            for part in cmd:
+                if redact_next:
+                    safe_cmd.append("***")
+                    redact_next = False
+                    continue
+                safe_cmd.append(part)
+                if part == "-http_proxy":
+                    redact_next = True
 
             logger.debug("Construction commande FFmpeg",
                         session_id=session_id,
-                        command=" ".join(cmd[:15]) + "...",  # Première partie seulement
+                        command=" ".join(safe_cmd[:17]) + "...",
                         log_path=sess.log_path)
             
             log_f = open(sess.log_path, "ab", buffering=0)

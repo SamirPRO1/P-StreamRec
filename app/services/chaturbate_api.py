@@ -12,6 +12,7 @@ import aiohttp
 
 from ..logger import logger
 from ..core.config import CB_REQUEST_DELAY
+from ..core.http_client import aiohttp_client_session, aiohttp_request_kwargs
 from .chaturbate_auth import ChaturbateAuthService
 from .flaresolverr import FlareSolverrClient
 
@@ -65,11 +66,12 @@ class ChaturbateAPI:
             if headers is None:
                 headers = self._get_headers()
 
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp_client_session() as session:
                 try:
                     async with session.request(
                         method, url, headers=headers, ssl=False,
                         timeout=aiohttp.ClientTimeout(total=15),
+                        **aiohttp_request_kwargs(),
                         **kwargs
                     ) as resp:
                         if resp.status == 403 and self.flaresolverr:
@@ -92,6 +94,7 @@ class ChaturbateAPI:
                                 async with session.request(
                                     method, url, headers=headers, ssl=False,
                                     timeout=aiohttp.ClientTimeout(total=15),
+                                    **aiohttp_request_kwargs(),
                                     **kwargs
                                 ) as retry_resp:
                                     # Read body before response context exits
@@ -135,7 +138,7 @@ class ChaturbateAPI:
         except Exception:
             auth_cookies = None
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp_client_session() as session:
             data = await check_model_status(
                 session, username, csrftoken, auth_cookies=auth_cookies
             )
@@ -529,8 +532,8 @@ class ChaturbateAPI:
 
                 # Check quality sources in priority order
                 for field in [
-                    "hls_source_hd", "hls_source_high",
-                    "hls_source_720p", "hls_source_1080p",
+                    "hls_source_1080p", "hls_source_hd",
+                    "hls_source_high", "hls_source_720p",
                     "hls_source"
                 ]:
                     if data.get(field):

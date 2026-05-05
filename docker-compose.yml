@@ -36,6 +36,12 @@ services:
       - CHATURBATE_PASSWORD=${CHATURBATE_PASSWORD:-}
       # FlareSolverr
       - FLARESOLVERR_URL=${FLARESOLVERR_URL:-http://flaresolverr:8191}
+      # Optional outbound proxy for provider requests (HTTP(S) or SOCKS for Python resolvers)
+      - PSTREAMREC_PROXY_URL=${PSTREAMREC_PROXY_URL:-}
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - ALL_PROXY=${ALL_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1,flaresolverr}
     ports:
       - "${HOST_PORT:-8080}:${PORT:-8080}"
     volumes:

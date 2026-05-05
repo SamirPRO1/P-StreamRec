@@ -106,7 +106,15 @@ docker run -d --name p-streamrec \
 | `CHATURBATE_USERNAME` | — | Chaturbate login (optional, enables Following + better quality) |
 | `CHATURBATE_PASSWORD` | — | Chaturbate password (optional) |
 | `FLARESOLVERR_URL` | — | FlareSolverr URL (e.g. `http://flaresolverr:8191`) |
+| `PSTREAMREC_PROXY_URL` | — | Optional outbound proxy for provider requests (`http://`, `https://`, `socks4://`, `socks5://`) |
+| `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` | — | Standard proxy env vars, also honored when `PSTREAMREC_PROXY_URL` is unset |
+| `NO_PROXY` | `localhost,127.0.0.1,flaresolverr` | Hosts that should bypass standard proxy env vars |
 | `TZ` | `UTC` | Timezone (e.g. `America/Toronto`) |
+
+For recording downloads, FFmpeg can use HTTP(S) proxies via `PSTREAMREC_PROXY_URL`
+or the standard proxy env vars. SOCKS proxies are supported by the Python
+resolvers/API calls; use an HTTP proxy if FFmpeg also needs to fetch HLS
+segments through the proxy.
 
 ## Usage
 

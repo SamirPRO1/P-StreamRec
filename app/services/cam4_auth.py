@@ -20,6 +20,7 @@ from typing import Any, Dict, Optional
 import aiohttp
 
 from ..logger import logger
+from ..core.http_client import aiohttp_client_session, aiohttp_request_kwargs
 
 
 _PREFIX = "cam4:"
@@ -70,13 +71,14 @@ class CAM4AuthService:
             return {"success": False, "error": err}
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp_client_session() as session:
                 # 1) Seed la session en chargeant la page de login (cookies initiaux)
                 try:
                     await session.get(
                         LOGIN_PAGE_URL,
                         headers={"User-Agent": self._user_agent},
                         timeout=aiohttp.ClientTimeout(total=15),
+                        **aiohttp_request_kwargs(),
                     )
                 except Exception:
                     pass
@@ -97,6 +99,7 @@ class CAM4AuthService:
                     headers=headers,
                     allow_redirects=False,
                     timeout=aiohttp.ClientTimeout(total=30),
+                    **aiohttp_request_kwargs(),
                 ) as resp:
                     body_text = await resp.text()
                     try:

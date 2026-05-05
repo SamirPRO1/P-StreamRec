@@ -5,8 +5,14 @@ import asyncio
 import aiohttp
 import requests
 from typing import Optional
+from urllib.parse import urljoin
 from .base import ResolveError
 from ..logger import logger
+from ..core.http_client import (
+    aiohttp_client_session,
+    aiohttp_request_kwargs,
+    requests_proxy_kwargs,
+)
 
 # Rate limiting pour éviter HTTP 429
 _last_request_time = 0
@@ -14,6 +20,40 @@ _min_delay_between_requests = 2.0  # 2 secondes entre chaque requête
 
 # Optional ChaturbateAPI instance (set at startup)
 _chaturbate_api = None
+
+
+def _quality_field_order(max_height: Optional[int] = None):
+    """Return Chaturbate HLS fields from preferred to fallback."""
+    labels = {
+        'hls_source_1080p': '1080p',
+        'hls_source_hd': 'HD',
+        'hls_source_high': 'High',
+        'hls_source_720p': '720p',
+        'hls_source': 'Standard',
+    }
+
+    if not max_height or max_height <= 0:
+        order = [
+            'hls_source_1080p', 'hls_source_hd',
+            'hls_source_high', 'hls_source_720p', 'hls_source',
+        ]
+    else:
+        order = []
+        if max_height >= 1080:
+            order.extend(['hls_source_1080p', 'hls_source_hd'])
+        if max_height >= 720:
+            order.extend(['hls_source_720p', 'hls_source_high'])
+        order.append('hls_source')
+        # Last-resort fallbacks keep recording available if Chaturbate omits
+        # the exact capped field. Master playlists are still capped later.
+        for field_name in [
+            'hls_source_1080p', 'hls_source_hd',
+            'hls_source_high', 'hls_source_720p',
+        ]:
+            if field_name not in order:
+                order.append(field_name)
+
+    return [(field_name, labels[field_name]) for field_name in order]
 
 
 def set_chaturbate_api(api):
@@ -68,7 +108,7 @@ async def _resolve_m3u8_async_fallback(username: str, max_height: Optional[int] 
     }
 
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp_client_session() as session:
             # 1) API chatvideocontext
             api_url = f"https://chaturbate.com/api/chatvideocontext/{username}/"
             try:
@@ -77,15 +117,12 @@ async def _resolve_m3u8_async_fallback(username: str, max_height: Optional[int] 
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=10),
                     ssl=False,
+                    **aiohttp_request_kwargs(),
                 ) as api_resp:
                     if api_resp.status == 200:
                         api_data = await api_resp.json(content_type=None)
-                        quality_checks = [
-                            'hls_source_hd', 'hls_source_high',
-                            'hls_source_720p', 'hls_source_1080p', 'hls_source',
-                        ]
                         best_m3u8 = None
-                        for field_name in quality_checks:
+                        for field_name, _quality_label in _quality_field_order(max_height):
                             if api_data.get(field_name):
                                 best_m3u8 = api_data[field_name]
                                 break
@@ -104,6 +141,7 @@ async def _resolve_m3u8_async_fallback(username: str, max_height: Optional[int] 
                 headers=html_headers,
                 timeout=aiohttp.ClientTimeout(total=10),
                 ssl=False,
+                **aiohttp_request_kwargs(),
             ) as resp:
                 if resp.status != 200:
                     raise ResolveError(f"Impossible d'accéder à la page (HTTP {resp.status})")
@@ -193,29 +231,29 @@ def _pick_variant(variants, max_height: Optional[int]):
 
 async def _resolve_variant(m3u8_url: str, max_height: Optional[int] = None) -> str:
     """If URL is a master playlist, pick a variant according to max_height."""
-    if 'playlist.m3u8' not in m3u8_url:
+    if '.m3u8' not in m3u8_url:
         return m3u8_url
 
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp_client_session() as session:
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             }
             async with session.get(
                 m3u8_url, headers=headers,
-                timeout=aiohttp.ClientTimeout(total=10), ssl=False
+                timeout=aiohttp.ClientTimeout(total=10), ssl=False,
+                **aiohttp_request_kwargs(),
             ) as resp:
                 if resp.status == 200:
                     text = await resp.text()
                     variants = _parse_master_playlist(text)
                     picked = _pick_variant(variants, max_height)
                     if picked:
-                        base_url = m3u8_url.rsplit('/', 1)[0]
                         logger.debug("HLS variant picked",
                                     max_height=max_height,
                                     variant=picked,
                                     candidates=len(variants))
-                        return f"{base_url}/{picked}"
+                        return urljoin(m3u8_url, picked)
     except Exception as e:
         logger.debug("Could not extract variant from playlist", error=str(e))
 
@@ -252,7 +290,12 @@ def resolve_m3u8(username: str) -> str:
             "Referer": "https://chaturbate.com/",
         }
 
-        api_resp = requests.get(api_url, headers=headers, timeout=10)
+        api_resp = requests.get(
+            api_url,
+            headers=headers,
+            timeout=10,
+            **requests_proxy_kwargs(),
+        )
         if api_resp.status_code == 200:
             api_data = api_resp.json()
 
@@ -265,16 +308,7 @@ def resolve_m3u8(username: str) -> str:
             best_m3u8 = None
             quality_source = None
 
-            # Priorité des sources (de meilleure à moins bonne)
-            quality_checks = [
-                ('hls_source_hd', 'HD'),
-                ('hls_source_high', 'High'),
-                ('hls_source_720p', '720p'),
-                ('hls_source_1080p', '1080p'),
-                ('hls_source', 'Standard')
-            ]
-
-            for field_name, quality_label in quality_checks:
+            for field_name, quality_label in _quality_field_order(None):
                 if api_data.get(field_name):
                     best_m3u8 = api_data[field_name]
                     quality_source = f"{field_name} ({quality_label})"
@@ -286,7 +320,12 @@ def resolve_m3u8(username: str) -> str:
                 if 'playlist.m3u8' in best_m3u8:
                     try:
                         logger.debug("Extraction meilleure qualité du playlist", username=username)
-                        playlist_resp = requests.get(best_m3u8, headers=headers, timeout=10)
+                        playlist_resp = requests.get(
+                            best_m3u8,
+                            headers=headers,
+                            timeout=10,
+                            **requests_proxy_kwargs(),
+                        )
                         if playlist_resp.status_code == 200:
                             lines = playlist_resp.text.strip().split('\n')
                             # La dernière ligne non-vide qui n'est pas un commentaire est la meilleure qualité
@@ -316,7 +355,12 @@ def resolve_m3u8(username: str) -> str:
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         }
 
-        resp = requests.get(url, headers=headers, timeout=10)
+        resp = requests.get(
+            url,
+            headers=headers,
+            timeout=10,
+            **requests_proxy_kwargs(),
+        )
         logger.debug("Réponse HTTP reçue", username=username, status_code=resp.status_code)
 
         if resp.status_code != 200:

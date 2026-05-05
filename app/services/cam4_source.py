@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 
+from ..core.http_client import aiohttp_client_session, aiohttp_request_kwargs
+
 
 PROFILE_PAGE_URL = "https://www.cam4.com/{username}"
 BROADCAST_API_URL = "https://www.cam4.com/rest/v1.0/profile/{username}/streamInfo"
@@ -163,8 +165,13 @@ async def _fetch_html(
         headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in cookies.items())
     timeout = aiohttp.ClientTimeout(total=15)
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url, headers=headers, allow_redirects=True) as resp:
+        async with aiohttp_client_session(timeout=timeout) as session:
+            async with session.get(
+                url,
+                headers=headers,
+                allow_redirects=True,
+                **aiohttp_request_kwargs(),
+            ) as resp:
                 if resp.status != 200:
                     return None
                 return await resp.text()
@@ -178,8 +185,12 @@ async def _fetch_stream_info(
     timeout = aiohttp.ClientTimeout(total=15)
     url = BROADCAST_API_URL.format(username=username)
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url, headers={"User-Agent": user_agent}) as resp:
+        async with aiohttp_client_session(timeout=timeout) as session:
+            async with session.get(
+                url,
+                headers={"User-Agent": user_agent},
+                **aiohttp_request_kwargs(),
+            ) as resp:
                 if resp.status != 200:
                     return {}
                 data = await resp.json(content_type=None)
@@ -192,8 +203,12 @@ async def _scrape_hls(username: str, user_agent: str = _DEFAULT_UA) -> Optional[
     timeout = aiohttp.ClientTimeout(total=15)
     url = PROFILE_PAGE_URL.format(username=username)
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url, headers={"User-Agent": user_agent}) as resp:
+        async with aiohttp_client_session(timeout=timeout) as session:
+            async with session.get(
+                url,
+                headers={"User-Agent": user_agent},
+                **aiohttp_request_kwargs(),
+            ) as resp:
                 if resp.status != 200:
                     return None
                 html = await resp.text()
@@ -359,9 +374,14 @@ async def _favorite_request(
         headers["Content-Type"] = "application/json"
         kwargs["data"] = b""
     timeout = aiohttp.ClientTimeout(total=15)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
+    async with aiohttp_client_session(timeout=timeout) as session:
         async with session.request(
-            method, url, headers=headers, allow_redirects=False, **kwargs
+            method,
+            url,
+            headers=headers,
+            allow_redirects=False,
+            **aiohttp_request_kwargs(),
+            **kwargs
         ) as resp:
             body = await resp.text()
             return resp.status, body

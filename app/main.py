@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from .ffmpeg_runner import FFmpegManager
 from .logger import logger
 from .core.database import Database
+from .core.http_client import aiohttp_client_session, aiohttp_request_kwargs
 from .tasks.monitor import monitor_models_task
 from .tasks.convert import auto_convert_recordings_task
 from .services.flaresolverr import FlareSolverrClient
@@ -385,6 +386,8 @@ class StartBody(BaseModel):
     name: Optional[str] = None  # display name
     person: Optional[str] = None  # recording bucket (per person)
     auto_start: Optional[bool] = False  # True si démarrage automatique
+    record_quality: Optional[str] = None  # best, 1080p, 720p, 480p, 360p
+    recordQuality: Optional[str] = None  # camelCase frontend alias
 
 
 def slugify(value: str) -> str:
@@ -718,11 +721,20 @@ async def api_start(body: StartBody):
     if not target:
         logger.error("Champ 'target' vide dans la requête")
         raise HTTPException(status_code=400, detail="Champ 'target' requis")
+
+    model_settings = None
+    if not target.startswith("http://") and not target.startswith("https://"):
+        model_lookup_username = (body.person or target).strip()
+        if model_lookup_username:
+            try:
+                model_settings = await db.get_model(model_lookup_username)
+            except Exception:
+                model_settings = None
     
     # Si c'est un auto-start, vérifier que auto_record est activé dans la DB
     if body.auto_start:
         username = body.person or target
-        model = await db.get_model(username)
+        model = model_settings or await db.get_model(username)
         if model:
             auto_record = bool(model.get('auto_record', True))
             if not auto_record:
@@ -762,7 +774,10 @@ async def api_start(body: StartBody):
             )
         logger.subsection(f"Résolution via source '{effective_source}'")
         try:
-            max_height = await _get_max_recording_height()
+            record_quality = body.record_quality or body.recordQuality
+            if not record_quality and model_settings:
+                record_quality = model_settings.get("record_quality")
+            max_height = await _get_recording_height_for_quality(record_quality)
             m3u8_url = await _resolve_m3u8(effective_source, target, max_height)
             if not m3u8_url:
                 raise HTTPException(
@@ -892,7 +907,6 @@ async def get_model_status(username: str, source: Optional[str] = None):
     # Try up to 2 attempts with better headers
     for attempt in range(2):
         try:
-            import aiohttp
             api_url = f"https://chaturbate.com/api/chatvideocontext/{username}/"
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -901,11 +915,17 @@ async def get_model_status(username: str, source: Optional[str] = None):
                 "Referer": f"https://chaturbate.com/{username}/",
                 "Origin": "https://chaturbate.com",
             }
-            async with aiohttp.ClientSession() as session:
-                async with session.get(api_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15), ssl=False) as resp:
+            async with aiohttp_client_session() as session:
+                async with session.get(
+                    api_url,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                    ssl=False,
+                    **aiohttp_request_kwargs(),
+                ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        hls_fields = ['hls_source', 'hls_source_hd', 'hls_source_high', 'hls_source_720p', 'hls_source_1080p']
+                        hls_fields = ['hls_source_1080p', 'hls_source_hd', 'hls_source_high', 'hls_source_720p', 'hls_source']
                         is_online = any(data.get(f) for f in hls_fields)
                         viewers = data.get('num_viewers', 0)
                         room_status = data.get('room_status') or None
@@ -1918,6 +1938,35 @@ async def _get_max_recording_height() -> Optional[int]:
         return None
 
 
+def _record_quality_to_height(record_quality: Optional[str]) -> Optional[int]:
+    """Map model-level quality settings to an HLS height cap."""
+    if not record_quality:
+        return None
+
+    value = str(record_quality).strip().lower()
+    if value in {"best", "auto", "highest"}:
+        return None
+
+    match = re.fullmatch(r"(\d+)\s*p?", value)
+    if not match:
+        return None
+
+    height = int(match.group(1))
+    return height if height in _ALLOWED_MAX_RESOLUTIONS and height > 0 else None
+
+
+async def _get_recording_height_for_quality(
+    record_quality: Optional[str],
+) -> Optional[int]:
+    """Combine per-model quality with the global max-resolution cap."""
+    global_height = await _get_max_recording_height()
+    quality_height = _record_quality_to_height(record_quality)
+
+    if global_height and quality_height:
+        return min(global_height, quality_height)
+    return quality_height or global_height
+
+
 @app.put("/api/settings/recording")
 async def update_recording_settings(body: dict):
     """Update recording settings."""
@@ -2242,7 +2291,9 @@ async def auto_record_task():
                     # Modèle en ligne: résoudre le flux HLS
                     try:
                         hls_source = None
-                        max_height = await _get_max_recording_height()
+                        max_height = await _get_recording_height_for_quality(
+                            cached_status.get("record_quality")
+                        )
                         source_type = cached_status.get("source_type") or "chaturbate"
                         if source_type not in ("chaturbate", "cam4"):
                             logger.warning(

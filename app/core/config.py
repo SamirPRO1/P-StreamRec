@@ -35,6 +35,10 @@ FLARESOLVERR_MAX_TIMEOUT: int = int(os.getenv("FLARESOLVERR_MAX_TIMEOUT", "60000
 # Chaturbate request settings
 CB_REQUEST_DELAY: float = float(os.getenv("CB_REQUEST_DELAY", "1.0"))
 
+# Outbound proxy for provider requests (HTTP(S) or SOCKS).
+# Standard HTTP_PROXY/HTTPS_PROXY/ALL_PROXY env vars are also honored.
+PSTREAMREC_PROXY_URL: Optional[str] = os.getenv("PSTREAMREC_PROXY_URL")
+
 # Configuration serveur
 PORT = int(os.getenv("PORT", "8080"))
 HOST = os.getenv("HOST", "0.0.0.0")

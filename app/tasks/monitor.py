@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 from ..logger import logger
 from ..core.config import OUTPUT_DIR
+from ..core.http_client import aiohttp_client_session, aiohttp_request_kwargs
 
 # Intervalle de vérification (en secondes)
 MONITOR_INTERVAL = 60  # Vérifie toutes les 60 secondes
@@ -73,7 +74,13 @@ async def check_model_status(
         if cookies:
             headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in cookies.items())
         
-        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15), ssl=False) as response:
+        async with session.get(
+            url,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=15),
+            ssl=False,
+            **aiohttp_request_kwargs(),
+        ) as response:
             if response.status == 200:
                 data = await response.json()
                 
@@ -225,7 +232,12 @@ async def download_thumbnail_from_chaturbate(
         
         for img_url in img_urls:
             try:
-                async with session.get(img_url, headers=headers, timeout=5) as response:
+                async with session.get(
+                    img_url,
+                    headers=headers,
+                    timeout=5,
+                    **aiohttp_request_kwargs(),
+                ) as response:
                     if response.status == 200:
                         content = await response.read()
                         
@@ -438,7 +450,7 @@ async def monitor_models_task(
 
     await db.initialize()
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp_client_session() as session:
         while True:
             try:
                 models = await db.get_all_models()

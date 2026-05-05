@@ -15,6 +15,7 @@ import bcrypt
 
 from ..logger import logger
 from ..core.config import OUTPUT_DIR, CHATURBATE_CSRFTOKEN, CHATURBATE_SESSIONID
+from ..core.http_client import aiohttp_client_session, aiohttp_request_kwargs
 from .flaresolverr import FlareSolverrClient
 
 
@@ -111,14 +112,15 @@ class ChaturbateAuthService:
                 if cookie_header:
                     headers["Cookie"] = cookie_header
 
-                async with aiohttp.ClientSession() as session:
+                async with aiohttp_client_session() as session:
                     async with session.post(
                         login_url,
                         data=form_data,
                         headers=headers,
                         allow_redirects=False,
                         ssl=False,
-                        timeout=aiohttp.ClientTimeout(total=30)
+                        timeout=aiohttp.ClientTimeout(total=30),
+                        **aiohttp_request_kwargs(),
                     ) as resp:
                         # Successful login returns 302 redirect
                         if resp.status in (301, 302):
@@ -176,11 +178,12 @@ class ChaturbateAuthService:
 
         cookies = {}
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp_client_session() as session:
             try:
                 async with session.get(
                     url, headers=headers, ssl=False,
-                    timeout=aiohttp.ClientTimeout(total=15)
+                    timeout=aiohttp.ClientTimeout(total=15),
+                    **aiohttp_request_kwargs(),
                 ) as resp:
                     if resp.status == 403 and self.flaresolverr:
                         # Cloudflare block - use FlareSolverr
@@ -197,7 +200,8 @@ class ChaturbateAuthService:
                             headers["Cookie"] = cookie_header
                             async with session.get(
                                 url, headers=headers, ssl=False,
-                                timeout=aiohttp.ClientTimeout(total=15)
+                                timeout=aiohttp.ClientTimeout(total=15),
+                                **aiohttp_request_kwargs(),
                             ) as retry_resp:
                                 if retry_resp.status == 200:
                                     html = await retry_resp.text()
@@ -292,7 +296,7 @@ class ChaturbateAuthService:
         # Validate existing session
         is_valid = await self._validate_session()
         if is_valid:
-            session = aiohttp.ClientSession()
+            session = aiohttp.ClientSession(trust_env=True)
             # Set cookies on session
             for name, value in self._cookies.items():
                 session.cookie_jar.update_cookies(
@@ -322,13 +326,14 @@ class ChaturbateAuthService:
                 "User-Agent": self._user_agent,
                 "Cookie": "; ".join(f"{k}={v}" for k, v in self._cookies.items()),
             }
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp_client_session() as session:
                 async with session.get(
                     "https://chaturbate.com/followed-cams/",
                     headers=headers,
                     allow_redirects=False,
                     ssl=False,
-                    timeout=aiohttp.ClientTimeout(total=10)
+                    timeout=aiohttp.ClientTimeout(total=10),
+                    **aiohttp_request_kwargs(),
                 ) as resp:
                     # 200 = valid session, 302 to login = expired
                     return resp.status == 200

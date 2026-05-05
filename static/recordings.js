@@ -250,6 +250,8 @@ async function playRecording(username, filename, recordingId) {
 
   title.textContent = username + ' - ' + filename;
   modal.style.display = 'flex';
+  modal.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('player-modal-open');
 
   var url = '/streams/records/' + encodeURIComponent(username) + '/' + encodeURIComponent(filename);
 
@@ -324,18 +326,60 @@ function savePosition(recordingId, username, position, duration) {
 async function closePlayer() {
   var modal = document.getElementById('playerModal');
   var video = document.getElementById('recordingPlayer');
+  if (!modal || !video || modal.style.display === 'none') return;
+
+  var recordingId = currentPlayingRecordingId;
+  var username = currentPlayingUsername;
+  var filename = currentPlayingFilename;
+  var position = video.currentTime || 0;
+  var duration = Number.isFinite(video.duration) ? video.duration : 0;
+
+  var interval = modal.dataset.saveInterval;
+  if (interval) {
+    clearInterval(Number(interval));
+    delete modal.dataset.saveInterval;
+  }
+
+  modal.style.display = 'none';
+  modal.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('player-modal-open');
+
+  if (
+    document.fullscreenElement &&
+    (document.fullscreenElement === video || modal.contains(document.fullscreenElement))
+  ) {
+    document.exitFullscreen().catch(function(){});
+  }
+
+  video.onpause = null;
+  video.onloadedmetadata = null;
+  video.onerror = null;
+  video.pause();
+
+  if (currentPlayer) {
+    currentPlayer.destroy();
+    currentPlayer = null;
+  }
+  video.removeAttribute('src');
+  delete video.dataset.retried;
+  while (video.firstChild) { video.removeChild(video.firstChild); }
+  video.load();
+
+  currentPlayingRecordingId = '';
+  currentPlayingUsername = '';
+  currentPlayingFilename = '';
 
   // Save final position and check auto-delete
   var shouldAutoDelete = false;
-  if (currentPlayingRecordingId && video.currentTime > 0 && video.duration > 0) {
+  if (recordingId && position > 0 && duration > 0) {
     try {
-      var res = await fetch('/api/playback-position/' + encodeURIComponent(currentPlayingRecordingId), {
+      var res = await fetch('/api/playback-position/' + encodeURIComponent(recordingId), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          position: video.currentTime,
-          duration: video.duration,
-          username: currentPlayingUsername
+          position: position,
+          duration: duration,
+          username: username
         })
       });
       if (res.ok) {
@@ -345,28 +389,11 @@ async function closePlayer() {
     } catch (e) {}
   }
 
-  video.pause();
-
-  if (currentPlayer) {
-    currentPlayer.destroy();
-    currentPlayer = null;
-  }
-  video.removeAttribute('src');
-  delete video.dataset.retried;
-  // Remove any <source> elements added for TS fallback
-  while (video.firstChild) { video.removeChild(video.firstChild); }
-  video.load();
-
-  var interval = modal.dataset.saveInterval;
-  if (interval) clearInterval(Number(interval));
-
-  modal.style.display = 'none';
-
   // Auto-delete if threshold was reached
-  if (shouldAutoDelete && currentPlayingUsername && currentPlayingFilename) {
+  if (shouldAutoDelete && username && filename) {
     showNotification('Auto-deleting watched recording...', 'success');
     try {
-      var delRes = await fetch('/api/recordings/' + encodeURIComponent(currentPlayingUsername) + '/' + encodeURIComponent(currentPlayingFilename), {
+      var delRes = await fetch('/api/recordings/' + encodeURIComponent(username) + '/' + encodeURIComponent(filename), {
         method: 'DELETE'
       });
       if (delRes.ok) {
@@ -378,11 +405,6 @@ async function closePlayer() {
       showModelRecordings(currentDetailUser);
     }
   }
-
-  // Reset tracking
-  currentPlayingRecordingId = '';
-  currentPlayingUsername = '';
-  currentPlayingFilename = '';
 }
 
 // ============================================
@@ -584,6 +606,21 @@ window.addEventListener('DOMContentLoaded', function() {
   var style = document.createElement('style');
   style.textContent = '@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }';
   document.head.appendChild(style);
+
+  var modal = document.getElementById('playerModal');
+  if (modal) {
+    modal.addEventListener('click', function(e) {
+      if (e.target === modal) {
+        closePlayer();
+      }
+    });
+  }
+
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && modal && modal.style.display !== 'none') {
+      closePlayer();
+    }
+  });
 
   var loadingState = document.getElementById('loadingState');
 

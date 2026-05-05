@@ -3121,7 +3121,12 @@ button {
   justify-content: center;
 }
 
+body.player-modal-open {
+  overflow: hidden;
+}
+
 .player-modal-content {
+  position: relative;
   width: 98%;
   max-width: none;
   background: var(--bg-secondary);
@@ -3155,6 +3160,29 @@ button {
 
 .player-close-btn:hover {
   color: var(--text-primary);
+}
+
+.player-floating-close {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 10002;
+  width: 2.75rem;
+  height: 2.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: 2rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.player-floating-close:hover {
+  background: rgba(0, 0, 0, 0.9);
 }
 
 .recording-video {
