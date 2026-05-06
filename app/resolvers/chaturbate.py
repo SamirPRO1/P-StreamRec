@@ -230,8 +230,15 @@ def _pick_variant(variants, max_height: Optional[int]):
 
 
 async def _resolve_variant(m3u8_url: str, max_height: Optional[int] = None) -> str:
-    """If URL is a master playlist, pick a variant according to max_height."""
-    if '.m3u8' not in m3u8_url:
+    """If URL is a traditional master playlist, pick a variant according to max_height.
+
+    Only operates on playlist.m3u8 (non-LL-HLS muxed streams).
+    LL-HLS edge URLs (llhls.m3u8) carry separate audio rendition groups that are
+    only resolvable from the master playlist — ffmpeg must receive the master URL
+    so it can map both the video variant and the audio rendition. Passing a
+    video-only chunk URL to ffmpeg results in silent recordings.
+    """
+    if 'playlist.m3u8' not in m3u8_url:
         return m3u8_url
 
     try:
