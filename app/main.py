@@ -748,6 +748,10 @@ async def api_start(body: StartBody):
 
     m3u8_url: Optional[str] = None
     person: Optional[str] = (body.person or "").strip() or None
+    record_quality = body.record_quality or body.recordQuality
+    if not record_quality and model_settings:
+        record_quality = model_settings.get("record_quality")
+    max_height = await _get_recording_height_for_quality(record_quality)
 
     # Determine source type
     stype = (body.source_type or "").lower().strip()
@@ -774,10 +778,6 @@ async def api_start(body: StartBody):
             )
         logger.subsection(f"Résolution via source '{effective_source}'")
         try:
-            record_quality = body.record_quality or body.recordQuality
-            if not record_quality and model_settings:
-                record_quality = model_settings.get("record_quality")
-            max_height = await _get_recording_height_for_quality(record_quality)
             m3u8_url = await _resolve_m3u8(effective_source, target, max_height)
             if not m3u8_url:
                 raise HTTPException(

@@ -30,13 +30,23 @@ async def _check_live_via_cdn(session: aiohttp.ClientSession, username: str) -> 
     A 200 response with a non-trivial body means the model is currently streaming.
     """
     url = f"https://roomimg.stream.highwebmedia.com/ri/{username}.jpg"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": "https://chaturbate.com/",
+    }
     try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10), ssl=False) as resp:
+        async with session.get(
+            url,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=10),
+            ssl=False,
+            **aiohttp_request_kwargs(),
+        ) as resp:
             if resp.status == 200:
                 content = await resp.read()
                 return len(content) > 1000
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Erreur fallback live CDN", username=username, error=str(e))
     return False
 
 

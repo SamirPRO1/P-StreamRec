@@ -208,11 +208,14 @@ class FFmpegManager:
             # For Chaturbate LL-HLS master playlists, the master URL contains
             # both video variants and a separate audio rendition group. Passing
             # only a video-only chunk URL (from _resolve_variant) strips audio.
-            # Instead we pass the master URL and select streams explicitly.
             is_llhls = 'llhls.m3u8' in sess.input_url
-            if is_llhls:
+            if is_llhls and max_height and max_height > 0:
                 v_idx = _llhls_video_stream_index(max_height)
                 map_args = ["-map", "0:a:0", "-map", f"0:v:{v_idx}"]
+            elif is_llhls:
+                # Let FFmpeg's default stream selection choose the best video
+                # plus audio. This avoids assuming every master has all variants.
+                map_args = []
             else:
                 map_args = ["-map", "0"]
 
