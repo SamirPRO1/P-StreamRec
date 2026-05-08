@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from .ffmpeg_runner import FFmpegManager
 from .logger import logger
 from .core.database import Database
+from .core.config import MIN_RECORDING_BYTES, MIN_RECORDING_SECONDS
 from .core.http_client import aiohttp_client_session, aiohttp_request_kwargs
 from .tasks.monitor import monitor_models_task
 from .tasks.convert import auto_convert_recordings_task
@@ -215,16 +216,57 @@ async def _no_cache_static(request: Request, call_next):
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+def _recording_media_type(filename: str) -> str:
+    return "video/mp4" if filename.endswith(".mp4") else "video/mp2t"
+
+
+def _recording_headers(filename: str, file_size: int) -> dict:
+    return {
+        "Content-Length": str(file_size),
+        "Accept-Ranges": "bytes",
+        "Content-Disposition": f'inline; filename="{filename}"',
+        "Cache-Control": "public, max-age=3600",
+    }
+
+
+def _parse_byte_range(range_header: str, file_size: int) -> Optional[tuple[int, int]]:
+    if file_size <= 0 or not range_header.startswith("bytes="):
+        return None
+
+    range_spec = range_header[len("bytes="):].strip()
+    if "," in range_spec or "-" not in range_spec:
+        return None
+
+    start_text, end_text = range_spec.split("-", 1)
+    try:
+        if start_text == "":
+            suffix_length = int(end_text)
+            if suffix_length <= 0:
+                return None
+            start = max(file_size - suffix_length, 0)
+            end = file_size - 1
+        else:
+            start = int(start_text)
+            end = int(end_text) if end_text else file_size - 1
+            end = min(end, file_size - 1)
+    except ValueError:
+        return None
+
+    if start < 0 or start >= file_size or end < start:
+        return None
+    return start, end
+
+
 # Route protégée pour les enregistrements
-@app.get("/streams/records/{username}/{filename}")
+@app.api_route("/streams/records/{username}/{filename}", methods=["GET", "HEAD"])
 async def serve_recording_protected(request: Request, username: str, filename: str):
     """Sert un enregistrement (TS ou MP4) avec support HTTP Range pour les gros fichiers"""
     from fastapi.responses import StreamingResponse
 
-    logger.api_request("GET", f"/streams/records/{username}/{filename}")
+    logger.api_request(request.method, f"/streams/records/{username}/{filename}")
 
     # Sécurité: vérifier le nom de fichier
-    if ".." in filename or "/" in filename or not (filename.endswith(".ts") or filename.endswith(".mp4")):
+    if ".." in username or "/" in username or ".." in filename or "/" in filename or not (filename.endswith(".ts") or filename.endswith(".mp4")):
         logger.warning("Tentative d'accès fichier invalide", username=username, filename=filename)
         raise HTTPException(status_code=400, detail="Nom de fichier invalide")
 
@@ -254,30 +296,24 @@ async def serve_recording_protected(request: Request, username: str, filename: s
     file_size = file_path.stat().st_size
     logger.file_operation("Lecture", str(file_path), size=file_size)
 
-    # Set correct media type based on file extension
-    if filename.endswith(".mp4"):
-        media_type = "video/mp4"
-    else:
-        media_type = "video/mp2t"
+    media_type = _recording_media_type(filename)
+    base_headers = _recording_headers(filename, file_size)
 
     # HTTP Range request support pour la lecture vidéo de gros fichiers
     range_header = request.headers.get("range")
 
     if range_header:
-        # Parse "bytes=start-end"
-        range_match = re.match(r"bytes=(\d+)-(\d*)", range_header)
-        if not range_match:
-            raise HTTPException(status_code=416, detail="Range Not Satisfiable")
-
-        start = int(range_match.group(1))
-        end = int(range_match.group(2)) if range_match.group(2) else file_size - 1
-
-        if start >= file_size or end >= file_size or start > end:
+        byte_range = _parse_byte_range(range_header, file_size)
+        if not byte_range:
             return Response(
                 status_code=416,
-                headers={"Content-Range": f"bytes */{file_size}"}
+                headers={
+                    "Content-Range": f"bytes */{file_size}",
+                    "Accept-Ranges": "bytes",
+                }
             )
 
+        start, end = byte_range
         chunk_size = end - start + 1
 
         async def range_file_stream():
@@ -292,38 +328,26 @@ async def serve_recording_protected(request: Request, username: str, filename: s
                     remaining -= len(data)
                     yield data
 
+        headers = {
+            **base_headers,
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Content-Length": str(chunk_size),
+        }
+
+        if request.method == "HEAD":
+            return Response(status_code=206, media_type=media_type, headers=headers)
+
         return StreamingResponse(
             range_file_stream(),
             status_code=206,
             media_type=media_type,
-            headers={
-                "Content-Range": f"bytes {start}-{end}/{file_size}",
-                "Content-Length": str(chunk_size),
-                "Accept-Ranges": "bytes",
-                "Content-Disposition": f'inline; filename="{filename}"',
-                "Cache-Control": "public, max-age=3600",
-            }
+            headers=headers
         )
 
-    # Pas de Range header: servir le fichier complet
-    async def full_file_stream():
-        with open(file_path, "rb") as f:
-            while True:
-                data = f.read(64 * 1024)  # 64KB chunks
-                if not data:
-                    break
-                yield data
+    if request.method == "HEAD":
+        return Response(status_code=200, media_type=media_type, headers=base_headers)
 
-    return StreamingResponse(
-        full_file_stream(),
-        media_type=media_type,
-        headers={
-            "Content-Length": str(file_size),
-            "Accept-Ranges": "bytes",
-            "Content-Disposition": f'inline; filename="{filename}"',
-            "Cache-Control": "public, max-age=3600",
-        }
-    )
+    return FileResponse(str(file_path), media_type=media_type, headers=base_headers)
 
 # Mount pour les sessions HLS live uniquement
 app.mount("/streams/sessions", StaticFiles(directory=str(OUTPUT_DIR / "sessions")), name="streams_sessions")
@@ -1145,6 +1169,12 @@ async def list_recordings(username: str, show_ts: bool = False):
 
         # Formater la durée
         duration_seconds = rec.get('duration_seconds', 0)
+        if (
+            (duration_seconds and duration_seconds < MIN_RECORDING_SECONDS)
+            or (not duration_seconds and file_size < MIN_RECORDING_BYTES)
+        ):
+            continue
+
         hours = duration_seconds // 3600
         minutes = (duration_seconds % 3600) // 60
         seconds = duration_seconds % 60
@@ -1252,6 +1282,12 @@ async def get_all_recordings(
 
         # Format duration
         duration_seconds = rec.get("duration_seconds", 0)
+        if (
+            (duration_seconds and duration_seconds < MIN_RECORDING_SECONDS)
+            or (not duration_seconds and file_size < MIN_RECORDING_BYTES)
+        ):
+            continue
+
         hours = duration_seconds // 3600
         minutes = (duration_seconds % 3600) // 60
         seconds = duration_seconds % 60

@@ -7,10 +7,11 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 from ..logger import logger
-from ..core.config import AUTO_CONVERT, KEEP_TS
+from ..core.config import AUTO_CONVERT, KEEP_TS, MIN_RECORDING_BYTES, MIN_RECORDING_SECONDS
 
 # Nombre maximal de tentatives de conversion avant skip automatique
 MAX_CONVERSION_ATTEMPTS = 3
+SHORT_RECORDING_PROBE_BYTES = max(MIN_RECORDING_BYTES, 64 * 1024 * 1024)
 
 
 async def convert_ts_to_mp4(
@@ -49,6 +50,7 @@ async def convert_ts_to_mp4(
         "-map", "0:a:0?",
         "-c", "copy",
         "-bsf:a", "aac_adtstoasc",
+        "-avoid_negative_ts", "make_zero",
         "-movflags", "+faststart",
         "-y",
         str(mp4_path)
@@ -248,14 +250,50 @@ async def auto_convert_recordings_task(db, output_dir: Path, ffmpeg_manager, ffm
                                    last_modified_ago=f"{time.time() - last_modified:.0f}s")
                         continue
 
+                    existing = recordings_by_filename.get(ts_file.name)
+                    ts_size = ts_path.stat().st_size
+                    candidate_duration = int((existing or {}).get('duration_seconds') or 0)
+                    if ts_size <= SHORT_RECORDING_PROBE_BYTES and candidate_duration == 0 and ts_size > 0:
+                        from .monitor import get_video_duration
+                        candidate_duration = await get_video_duration(ts_path, ffmpeg_path)
+
+                    is_short_fragment = (
+                        ts_size == 0
+                        or (candidate_duration == 0 and ts_size < MIN_RECORDING_BYTES)
+                        or (0 < candidate_duration < MIN_RECORDING_SECONDS)
+                    )
+                    if is_short_fragment:
+                        try:
+                            if ts_path.exists():
+                                ts_path.unlink()
+                            await db.delete_recording(username, ts_file.name)
+                            logger.warning(
+                                "Fragment ignoré avant conversion",
+                                username=username,
+                                filename=ts_file.name,
+                                duration_seconds=candidate_duration,
+                                file_size=ts_size,
+                                min_seconds=MIN_RECORDING_SECONDS,
+                                min_bytes=MIN_RECORDING_BYTES,
+                            )
+                        except Exception as e:
+                            logger.error(
+                                "Erreur suppression fragment avant conversion",
+                                username=username,
+                                filename=ts_file.name,
+                                error=str(e),
+                            )
+                        continue
+
                     # If auto_convert is disabled, just index the TS file in DB
                     if not auto_convert:
-                        existing = recordings_by_filename.get(ts_file.name)
                         if not existing:
                             recording_id = f"{username}_{ts_file.stem}"
                             # Calculate duration from TS file
-                            from .monitor import get_video_duration
-                            duration = await get_video_duration(ts_path, ffmpeg_path)
+                            duration = candidate_duration
+                            if duration == 0:
+                                from .monitor import get_video_duration
+                                duration = await get_video_duration(ts_path, ffmpeg_path)
                             await db.add_or_update_recording(
                                 username=username,
                                 filename=ts_file.name,
@@ -271,7 +309,6 @@ async def auto_convert_recordings_task(db, output_dir: Path, ffmpeg_manager, ffm
                         continue
 
                     # Skip si trop de tentatives ratées pour ce fichier
-                    existing = recordings_by_filename.get(ts_file.name)
                     attempts = (existing or {}).get('conversion_attempts') or 0
                     if attempts >= MAX_CONVERSION_ATTEMPTS:
                         logger.debug("Conversion skippée (trop d'échecs)",

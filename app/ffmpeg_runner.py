@@ -11,6 +11,7 @@ from .core.http_client import (
     get_outbound_proxy_url,
     is_socks_proxy,
 )
+from .core.config import MIN_RECORDING_SECONDS
 
 # Chaturbate LL-HLS master playlists multiplex all quality levels into one stream.
 # Each entry maps a max_height ceiling to the ffmpeg video stream index.
@@ -49,6 +50,8 @@ class FFmpegSession:
         self.log_path = os.path.join(self.sessions_dir, "ffmpeg.log")
         self._stop_evt = threading.Event()
         self._writer_thread: Optional[threading.Thread] = None
+        self.bytes_written = 0
+        self.completed_at: Optional[str] = None
         
         logger.debug("FFmpegSession initialisée", 
                     session_id=session_id, 
@@ -88,7 +91,7 @@ class FFmpegSession:
         last_log_threshold = 0
 
         try:
-            while not self._stop_evt.is_set():
+            while True:
                 chunk = self.process.stdout.read(CHUNK_SIZE)
                 if not chunk:
                     logger.info("Writer loop: fin du flux",
@@ -100,6 +103,7 @@ class FFmpegSession:
                 f.write(chunk)
                 total_bytes += len(chunk)
                 chunk_count += 1
+                self.bytes_written = total_bytes
 
                 # Log tous les 100MB (compteur monotone, évite les faux positifs du modulo)
                 threshold_100mb = total_bytes // (100 * 1024 * 1024)
@@ -116,17 +120,51 @@ class FFmpegSession:
                         exc_info=True,
                         total_bytes=total_bytes)
         finally:
+            elapsed = time.time() - self.start_time
             try:
                 f.flush()
                 f.close()
                 logger.info("Writer loop terminé", 
                            session_id=self.id,
                            total_bytes=total_bytes,
-                           mb_written=f"{total_bytes / 1024 / 1024:.1f}")
+                           mb_written=f"{total_bytes / 1024 / 1024:.1f}",
+                           elapsed_seconds=f"{elapsed:.1f}")
             except Exception as e:
                 logger.error("Erreur fermeture finale fichier", 
                            session_id=self.id, 
                            error=str(e))
+            self.bytes_written = total_bytes
+            self.completed_at = datetime.utcnow().isoformat() + "Z"
+            self._cleanup_short_recording(total_bytes, elapsed)
+
+    def _cleanup_short_recording(self, total_bytes: int, elapsed_seconds: float):
+        """Remove startup failures and tiny fragments before they reach the UI."""
+        if total_bytes == 0:
+            reason = "empty"
+        elif elapsed_seconds < MIN_RECORDING_SECONDS:
+            reason = "too_short"
+        else:
+            return
+
+        try:
+            if os.path.exists(self.record_path):
+                os.remove(self.record_path)
+                logger.warning(
+                    "Fragment recording supprimé",
+                    session_id=self.id,
+                    person=self.person,
+                    reason=reason,
+                    elapsed_seconds=f"{elapsed_seconds:.1f}",
+                    bytes_written=total_bytes,
+                    min_seconds=MIN_RECORDING_SECONDS,
+                )
+        except Exception as e:
+            logger.error(
+                "Erreur suppression fragment recording",
+                session_id=self.id,
+                person=self.person,
+                error=str(e),
+            )
 
 
 class FFmpegManager:
@@ -192,8 +230,13 @@ class FFmpegManager:
                 "-y",
                 # Options de reconnexion pour stabilité
                 "-reconnect", "1",
+                "-reconnect_at_eof", "1",
+                "-reconnect_on_network_error", "1",
+                "-reconnect_on_http_error", "4xx,5xx",
                 "-reconnect_streamed", "1",
                 "-reconnect_delay_max", "10",
+                "-reconnect_delay_total_max", "120",
+                "-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             ]
 
             proxy_url = ffmpeg_http_proxy_url()
@@ -204,6 +247,12 @@ class FFmpegManager:
                     "Proxy SOCKS configuré: les requêtes Python l'utilisent, "
                     "mais FFmpeg ne supporte ici que les proxys HTTP(S)"
                 )
+
+            if any(host in sess.input_url for host in ("chaturbate.com", "highwebmedia.com", "mmcdn.com")):
+                cmd.extend([
+                    "-headers",
+                    "Referer: https://chaturbate.com/\r\nOrigin: https://chaturbate.com\r\n",
+                ])
 
             # For Chaturbate LL-HLS master playlists, the master URL contains
             # both video variants and a separate audio rendition group. Passing
@@ -265,6 +314,22 @@ class FFmpegManager:
                              person=person,
                              playback_url=sess.playback_url,
                              record_path=sess.record_path_today())
+
+                time.sleep(1)
+                if proc.poll() is not None:
+                    if sess._writer_thread and sess._writer_thread.is_alive():
+                        sess._writer_thread.join(timeout=2)
+                    self._sessions.pop(sess.id, None)
+                    logger.warning(
+                        "FFmpeg arrêté immédiatement",
+                        session_id=session_id,
+                        person=person,
+                        returncode=proc.returncode,
+                        log_path=sess.log_path,
+                    )
+                    raise RuntimeError(
+                        "FFmpeg s'est arrêté immédiatement. Le flux est probablement indisponible ou le token HLS a expiré."
+                    )
                 
             except Exception as e:
                 logger.critical("Erreur démarrage FFmpeg", 

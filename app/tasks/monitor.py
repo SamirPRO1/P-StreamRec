@@ -15,13 +15,14 @@ if TYPE_CHECKING:
     from ..core.database import Database
 
 from ..logger import logger
-from ..core.config import OUTPUT_DIR
+from ..core.config import MIN_RECORDING_BYTES, MIN_RECORDING_SECONDS, OUTPUT_DIR
 from ..core.http_client import aiohttp_client_session, aiohttp_request_kwargs
 
 # Intervalle de vérification (en secondes)
 MONITOR_INTERVAL = 60  # Vérifie toutes les 60 secondes
 THUMBNAIL_UPDATE_INTERVAL = 300  # Miniature offline: toutes les 5 minutes
 THUMBNAIL_UPDATE_INTERVAL_LIVE = 60  # Miniature live: toutes les 60s pour refléter l'activité
+SHORT_RECORDING_PROBE_BYTES = max(MIN_RECORDING_BYTES, 64 * 1024 * 1024)
 
 async def _check_live_via_cdn(session: aiohttp.ClientSession, username: str) -> bool:
     """Check if a model is live using the Chaturbate thumbnail CDN.
@@ -410,12 +411,71 @@ async def update_recordings_cache(db: 'Database', username: str, output_dir: Pat
         if not records_dir.exists():
             return
 
+        async def cleanup_short_recording(ts_file: Path, existing_rec: dict | None, seconds_since_modification: float) -> bool:
+            stat = ts_file.stat()
+            cached_duration = int((existing_rec or {}).get('duration_seconds') or 0)
+            duration_seconds = cached_duration
+
+            if seconds_since_modification < 120:
+                return False
+
+            should_probe_duration = (
+                stat.st_size == 0
+                or stat.st_size <= SHORT_RECORDING_PROBE_BYTES
+                or (0 < duration_seconds < MIN_RECORDING_SECONDS)
+            )
+
+            if should_probe_duration and duration_seconds == 0 and stat.st_size > 0:
+                duration_seconds = await get_video_duration(ts_file, ffmpeg_path)
+
+            too_short = (
+                stat.st_size == 0
+                or (duration_seconds == 0 and stat.st_size < MIN_RECORDING_BYTES)
+                or (0 < duration_seconds < MIN_RECORDING_SECONDS)
+            )
+
+            if not too_short:
+                return False
+
+            mp4_path = ts_file.with_suffix('.mp4')
+            thumb_path = output_dir / "thumbnails" / username / f"{ts_file.stem}.jpg"
+            deleted = []
+            for path, label in ((ts_file, "TS"), (mp4_path, "MP4"), (thumb_path, "thumbnail")):
+                if path.exists():
+                    try:
+                        path.unlink()
+                        deleted.append(label)
+                    except Exception as e:
+                        logger.error(
+                            "Erreur suppression fragment recording",
+                            username=username,
+                            filename=path.name,
+                            error=str(e),
+                        )
+
+            await db.delete_recording(username, ts_file.name)
+            logger.warning(
+                "Recording trop court supprimé",
+                username=username,
+                filename=ts_file.name,
+                duration_seconds=duration_seconds,
+                file_size=stat.st_size,
+                min_seconds=MIN_RECORDING_SECONDS,
+                min_bytes=MIN_RECORDING_BYTES,
+                deleted=deleted,
+            )
+            return True
+
         for ts_file in records_dir.glob("*.ts"):
             stat = ts_file.stat()
             
             # Récupérer la durée actuelle depuis la DB
             existing_recordings = await db.get_recordings(username)
             existing_rec = next((r for r in existing_recordings if r['filename'] == ts_file.name), None)
+            seconds_since_modification = time.time() - stat.st_mtime
+
+            if await cleanup_short_recording(ts_file, existing_rec, seconds_since_modification):
+                continue
             
             # Calculer la durée uniquement si elle n'est pas déjà en cache ou est à 0
             duration_seconds = 0
@@ -425,9 +485,6 @@ async def update_recordings_cache(db: 'Database', username: str, output_dir: Pat
             if duration_seconds == 0:
                 # Vérifier que le fichier est stable (pas modifié depuis 120s)
                 # pour éviter de calculer la durée sur un fichier en cours d'écriture
-                last_modified = ts_file.stat().st_mtime
-                seconds_since_modification = time.time() - last_modified
-                
                 if seconds_since_modification >= 120:
                     # Calculer la durée avec ffprobe
                     duration_seconds = await get_video_duration(ts_file, ffmpeg_path)
