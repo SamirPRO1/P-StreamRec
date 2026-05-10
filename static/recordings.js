@@ -10,6 +10,9 @@ let showTsFiles = false;
 let currentPlayingRecordingId = '';
 let currentPlayingUsername = '';
 let currentPlayingFilename = '';
+let recordingPlaybackVolume = null;
+let recordingVolumeSaveTimeout = null;
+let recordingVolumeUsername = '';
 let currentDetailModel = null;        // cached settings for the open model
 let currentDetailRecordings = [];     // cached recordings used for timeline
 let timelineNowInterval = null;       // setInterval id for the blinking-now line update
@@ -542,6 +545,110 @@ function renderTimeline(username, recordings) {
 }
 
 // ============================================
+// Per-profile playback volume
+// ============================================
+function normalizeVolume(value) {
+  if (value === null || value === undefined || value === '') return null;
+  var volume = Number(value);
+  if (!Number.isFinite(volume)) return null;
+  return Math.min(1, Math.max(0, volume));
+}
+
+async function loadRecordingVolume(username) {
+  if (recordingVolumeSaveTimeout && recordingPlaybackVolume !== null) {
+    clearTimeout(recordingVolumeSaveTimeout);
+    persistRecordingVolume(recordingVolumeUsername, recordingPlaybackVolume);
+  }
+
+  recordingVolumeUsername = username;
+  recordingPlaybackVolume = null;
+
+  try {
+    var res = await fetch('/api/models/' + encodeURIComponent(username) + '/volume');
+    if (!res.ok) return;
+
+    var data = await res.json();
+    var saved = normalizeVolume(data.volume);
+    if (saved !== null) {
+      recordingPlaybackVolume = saved;
+      localStorage.setItem('video_volume_' + username, String(saved));
+      return;
+    }
+
+    var profileVolume = getLocalVolume('video_volume_' + username);
+    if (profileVolume !== null) {
+      saveRecordingVolume(username, profileVolume);
+    }
+  } catch (e) {
+    console.warn('Could not load saved profile volume:', e);
+  }
+}
+
+function persistRecordingVolume(username, volume) {
+  recordingVolumeSaveTimeout = null;
+  if (!username) return;
+
+  fetch('/api/models/' + encodeURIComponent(username) + '/volume', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ volume: volume }),
+    keepalive: true
+  }).catch(function(e) {
+    console.warn('Could not save profile volume:', e);
+  });
+}
+
+function saveRecordingVolume(username, volume) {
+  var normalized = normalizeVolume(volume);
+  if (!username || normalized === null) return;
+
+  recordingVolumeUsername = username;
+  recordingPlaybackVolume = normalized;
+  localStorage.setItem('video_volume_' + username, String(normalized));
+
+  if (recordingVolumeSaveTimeout) {
+    clearTimeout(recordingVolumeSaveTimeout);
+  }
+  recordingVolumeSaveTimeout = setTimeout(function() {
+    persistRecordingVolume(username, normalized);
+  }, 250);
+}
+
+function getLocalVolume(key) {
+  var saved = localStorage.getItem(key);
+  return saved === null ? null : normalizeVolume(saved);
+}
+
+function getSavedRecordingVolume(username) {
+  if (recordingVolumeUsername === username && recordingPlaybackVolume !== null) {
+    return recordingPlaybackVolume;
+  }
+
+  var profileVolume = getLocalVolume('video_volume_' + username);
+  if (profileVolume !== null) return profileVolume;
+
+  var legacyGlobalVolume = getLocalVolume('video_volume_global');
+  if (legacyGlobalVolume !== null) return legacyGlobalVolume;
+
+  return 0.5;
+}
+
+function setupRecordingVolumePersistence(video, username) {
+  if (!video) return;
+
+  video.volume = getSavedRecordingVolume(username);
+
+  if (video.dataset.volumePersistenceReady === 'true') return;
+  video.dataset.volumePersistenceReady = 'true';
+
+  video.addEventListener('volumechange', function() {
+    if (!video.muted || video.volume === 0) {
+      saveRecordingVolume(currentPlayingUsername, video.volume);
+    }
+  });
+}
+
+// ============================================
 // Play recording with resume support
 // ============================================
 async function playRecording(username, filename, recordingId) {
@@ -567,6 +674,8 @@ async function playRecording(username, filename, recordingId) {
     currentPlayer = null;
   }
   video.removeAttribute('src');
+  await loadRecordingVolume(username);
+  setupRecordingVolumePersistence(video, username);
 
   // TS files are raw MPEG-TS, not HLS streams - use direct playback
   video.src = url;
@@ -661,6 +770,11 @@ async function closePlayer() {
   video.onloadedmetadata = null;
   video.onerror = null;
   video.pause();
+
+  if (recordingVolumeSaveTimeout && recordingPlaybackVolume !== null) {
+    clearTimeout(recordingVolumeSaveTimeout);
+    persistRecordingVolume(username, recordingPlaybackVolume);
+  }
 
   if (currentPlayer) {
     currentPlayer.destroy();
@@ -909,6 +1023,13 @@ function showNotification(message, type) {
 // ============================================
 // Initialization
 // ============================================
+window.addEventListener('beforeunload', function() {
+  if (recordingVolumeSaveTimeout && recordingPlaybackVolume !== null) {
+    clearTimeout(recordingVolumeSaveTimeout);
+    persistRecordingVolume(recordingVolumeUsername, recordingPlaybackVolume);
+  }
+});
+
 window.addEventListener('DOMContentLoaded', function() {
   var style = document.createElement('style');
   style.textContent = '@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }';

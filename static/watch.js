@@ -16,6 +16,8 @@ let currentSourceType = '';
 let isFollowing = false;
 let isAutoRecord = false;
 let isModelTracked = false;
+let profilePlaybackVolume = null;
+let volumeSaveTimeout = null;
 let hlsPlayer = null;
 let streamLoaded = false;
 let currentStreamUrl = '';
@@ -55,6 +57,9 @@ async function initWatch() {
 
   document.title = currentUsername + ' - P-StreamRec';
   document.getElementById('watchUsername').textContent = currentUsername;
+
+  await loadProfileVolume();
+  setupVolumePersistence();
 
   // loadModelStatus doit s'exécuter en premier: il résout currentSourceType,
   // dont dépendent loadFollowStatus et loadTrackStatus pour router vers le
@@ -233,6 +238,7 @@ function startStreamWithUrl(streamUrl) {
   stopStream(false);
   currentStreamUrl = streamUrl;
   streamLoaded = true;
+  prepareMutedAutoplay(video);
 
   if (Hls.isSupported()) {
     hlsPlayer = new Hls({
@@ -244,7 +250,10 @@ function startStreamWithUrl(streamUrl) {
     hlsPlayer.attachMedia(video);
     hlsPlayer.on(Hls.Events.MANIFEST_PARSED, function() {
       updateQualitySelector();
-      video.play().catch(function() {});
+      startMutedAutoplay(video);
+    });
+    hlsPlayer.on(Hls.Events.LEVEL_LOADED, function() {
+      if (video.paused) startMutedAutoplay(video);
     });
     hlsPlayer.on(Hls.Events.ERROR, function(event, data) {
       if (data.fatal) {
@@ -268,9 +277,56 @@ function startStreamWithUrl(streamUrl) {
     resetQualitySelector();
     video.src = streamUrl;
     video.addEventListener('loadedmetadata', function() {
-      video.play().catch(function() {});
+      startMutedAutoplay(video);
+    }, { once: true });
+    video.addEventListener('canplay', function() {
+      startMutedAutoplay(video);
+    }, { once: true });
+    video.load();
+    startMutedAutoplay(video);
+  }
+}
+
+function prepareMutedAutoplay(video) {
+  video.autoplay = true;
+  video.muted = true;
+  video.defaultMuted = true;
+  video.playsInline = true;
+  video.setAttribute('autoplay', '');
+  video.setAttribute('muted', '');
+  video.setAttribute('playsinline', '');
+  video.setAttribute('webkit-playsinline', '');
+}
+
+function startMutedAutoplay(video) {
+  if (!video) return;
+
+  prepareMutedAutoplay(video);
+
+  var token = Date.now().toString(36) + Math.random().toString(36).slice(2);
+  video.dataset.autoplayToken = token;
+
+  var delays = [0, 200, 600, 1200, 2500];
+  function attempt(index) {
+    if (video.dataset.autoplayToken !== token) return;
+    prepareMutedAutoplay(video);
+
+    var promise = video.play();
+    if (!promise || typeof promise.catch !== 'function') return;
+
+    promise.catch(function(error) {
+      if (video.dataset.autoplayToken !== token) return;
+      if (index < delays.length - 1) {
+        setTimeout(function() {
+          attempt(index + 1);
+        }, delays[index + 1]);
+      } else {
+        console.warn('Muted autoplay did not start:', error);
+      }
     });
   }
+
+  attempt(0);
 }
 
 function hasActiveStream() {
@@ -533,25 +589,93 @@ async function toggleAutoRecord() {
 // ============================================
 // Volume persistence (across sessions)
 // ============================================
+function normalizeVolume(value) {
+  if (value === null || value === undefined || value === '') return null;
+  var volume = Number(value);
+  if (!Number.isFinite(volume)) return null;
+  return Math.min(1, Math.max(0, volume));
+}
+
+async function loadProfileVolume() {
+  try {
+    var res = await fetch('/api/models/' + encodeURIComponent(currentUsername) + '/volume');
+    if (!res.ok) return;
+
+    var data = await res.json();
+    var saved = normalizeVolume(data.volume);
+    if (saved !== null) {
+      profilePlaybackVolume = saved;
+      localStorage.setItem('video_volume_' + currentUsername, String(saved));
+      return;
+    }
+
+    var profileVolume = getLocalVolume('video_volume_' + currentUsername);
+    if (profileVolume !== null) {
+      saveProfileVolume(profileVolume);
+    }
+  } catch (e) {
+    console.warn('Could not load saved profile volume:', e);
+  }
+}
+
+function persistProfileVolume(volume) {
+  volumeSaveTimeout = null;
+  fetch('/api/models/' + encodeURIComponent(currentUsername) + '/volume', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ volume: volume }),
+    keepalive: true
+  }).catch(function(e) {
+    console.warn('Could not save profile volume:', e);
+  });
+}
+
+function saveProfileVolume(volume) {
+  var normalized = normalizeVolume(volume);
+  if (normalized === null) return;
+
+  profilePlaybackVolume = normalized;
+  localStorage.setItem('video_volume_' + currentUsername, String(normalized));
+
+  if (volumeSaveTimeout) {
+    clearTimeout(volumeSaveTimeout);
+  }
+  volumeSaveTimeout = setTimeout(function() {
+    persistProfileVolume(normalized);
+  }, 250);
+}
+
+function getLocalVolume(key) {
+  var saved = localStorage.getItem(key);
+  return saved === null ? null : normalizeVolume(saved);
+}
+
+function getSavedProfileVolume() {
+  if (profilePlaybackVolume !== null) return profilePlaybackVolume;
+
+  var profileVolume = getLocalVolume('video_volume_' + currentUsername);
+  if (profileVolume !== null) return profileVolume;
+
+  var legacyGlobalVolume = getLocalVolume('video_volume_global');
+  if (legacyGlobalVolume !== null) return legacyGlobalVolume;
+
+  return 0.5;
+}
+
 function setupVolumePersistence() {
   var video = document.getElementById('videoPlayer');
   if (!video) return;
 
-  // Restore last volume/mute state
-  var savedVolume = localStorage.getItem('video_volume_global');
-  var savedMuted = localStorage.getItem('video_muted_global');
-  if (savedVolume !== null) {
-    var v = parseFloat(savedVolume);
-    if (!isNaN(v) && v >= 0 && v <= 1) video.volume = v;
-  }
-  if (savedMuted !== null) {
-    video.muted = savedMuted === 'true';
-  }
+  video.volume = getSavedProfileVolume();
+
+  if (video.dataset.volumePersistenceReady === 'true') return;
+  video.dataset.volumePersistenceReady = 'true';
 
   // Persist on change
   video.addEventListener('volumechange', function() {
-    localStorage.setItem('video_volume_global', String(video.volume));
-    localStorage.setItem('video_muted_global', String(video.muted));
+    if (!video.muted || video.volume === 0) {
+      saveProfileVolume(video.volume);
+    }
   });
 }
 
@@ -582,7 +706,7 @@ function setupLiveControls() {
     muteBtn.addEventListener('click', function() {
       if (video.muted || video.volume === 0) {
         video.muted = false;
-        if (video.volume === 0) video.volume = 0.5;
+        if (video.volume === 0) video.volume = getSavedProfileVolume();
       } else {
         video.muted = true;
       }
@@ -596,6 +720,7 @@ function setupLiveControls() {
       if (Number.isNaN(volume)) return;
       video.volume = volume;
       video.muted = volume === 0;
+      saveProfileVolume(volume);
     });
   }
 
@@ -677,6 +802,10 @@ function showNotification(message, type) {
 // ============================================
 window.addEventListener('beforeunload', function() {
   if (statusCheckInterval) clearInterval(statusCheckInterval);
+  if (volumeSaveTimeout && profilePlaybackVolume !== null) {
+    clearTimeout(volumeSaveTimeout);
+    persistProfileVolume(profilePlaybackVolume);
+  }
   if (hlsPlayer) {
     hlsPlayer.destroy();
     hlsPlayer = null;
@@ -703,7 +832,6 @@ window.addEventListener('DOMContentLoaded', function() {
     });
   }
 
-  setupVolumePersistence();
   setupLiveControls();
   initWatch();
 });

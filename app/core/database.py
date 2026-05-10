@@ -715,6 +715,40 @@ class Database:
             """, (key, value, now, value, now))
             await db.commit()
 
+    def _model_volume_key(self, username: str) -> str:
+        """Stable settings key for a profile's playback volume."""
+        normalized = (username or "").strip().lower()
+        return f"model_volume:{normalized}"
+
+    async def get_model_volume(self, username: str) -> Optional[float]:
+        """Get the saved playback volume for a profile, if one exists."""
+        normalized = (username or "").strip()
+        if not normalized:
+            return None
+
+        value = await self.get_setting(self._model_volume_key(normalized))
+        if value is None:
+            return None
+
+        try:
+            volume = float(value)
+        except (TypeError, ValueError):
+            return None
+
+        if 0 <= volume <= 1:
+            return volume
+        return None
+
+    async def set_model_volume(self, username: str, volume: float):
+        """Persist a profile's playback volume."""
+        normalized = (username or "").strip()
+        if not normalized:
+            raise ValueError("username is required")
+        if not 0 <= volume <= 1:
+            raise ValueError("volume must be between 0 and 1")
+
+        await self.set_setting(self._model_volume_key(normalized), f"{volume:.4f}")
+
     async def get_blacklisted_tags(self) -> List[str]:
         """Get blacklisted tags list"""
         value = await self.get_setting("blacklisted_tags")

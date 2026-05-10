@@ -414,6 +414,10 @@ class StartBody(BaseModel):
     recordQuality: Optional[str] = None  # camelCase frontend alias
 
 
+class ModelVolumeBody(BaseModel):
+    volume: float
+
+
 def slugify(value: str) -> str:
     value = value.strip().lower()
     value = re.sub(r"[^a-z0-9_-]+", "-", value)
@@ -1631,6 +1635,38 @@ async def get_models():
     except Exception as e:
         logger.error("Erreur /api/models", error=str(e), exc_info=True)
         return {"models": [], "error": "transient"}
+
+
+@app.get("/api/models/{username}/volume")
+async def get_model_volume(username: str):
+    """Return the saved playback volume for one profile."""
+    username = (username or "").strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="Username requis")
+
+    return {
+        "username": username,
+        "volume": await db.get_model_volume(username),
+    }
+
+
+@app.put("/api/models/{username}/volume")
+async def update_model_volume(username: str, body: ModelVolumeBody):
+    """Persist the playback volume for one profile."""
+    username = (username or "").strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="Username requis")
+
+    volume = float(body.volume)
+    if not 0 <= volume <= 1:
+        raise HTTPException(status_code=400, detail="Volume must be between 0 and 1")
+
+    await db.set_model_volume(username, volume)
+    return {
+        "success": True,
+        "username": username,
+        "volume": volume,
+    }
 
 
 @app.post("/api/models")
